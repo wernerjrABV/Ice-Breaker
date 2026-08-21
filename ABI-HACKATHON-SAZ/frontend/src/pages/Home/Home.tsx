@@ -1,133 +1,384 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import { RefreshCw } from 'lucide-react'
+import {
+  AlertTriangle,
+  Camera,
+  CheckCircle2,
+  Clock3,
+  Send,
+  Store,
+  Wrench,
+} from 'lucide-react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from 'react'
 import Header from '../../components/Header/Header'
-import Footer from '../../components/Footer/Footer'
-import Card from '../../components/Card/Card'
-import Input from '../../components/Input/Input'
-import Button from '../../components/Button/Button'
-import hackathonImage from '../../assets/hackathon.png'
-import { createKickoffRequest, listKickoffRequests, type KickoffRequest } from '../../clients/client'
+import {
+  createTicket,
+  getTicket,
+  sendMessage,
+  sendPhoto,
+  sendSerial,
+  type Message,
+  type Ticket,
+  type TicketStatus,
+} from '../../clients/client'
 import './Home.css'
 
-function getErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+const DEMO_TICKET = {
+  nomePdv: 'Bar do João',
+  assunto: 'Congela bebidas',
+  descricaoBase: 'Bebidas congelando',
 }
 
-function getStatusLabel(status: string): string {
-  const statusLabels: Record<string, string> = {
-    pending: 'Pendente',
-    completed: 'Concluída',
-    failed: 'Com falha',
-  }
+const STATUS_LABELS: Record<TicketStatus, string> = {
+  em_triagem: 'Em triagem',
+  aguardando_confirmacao: 'Aguardando confirmação',
+  resolvido_remotamente: 'Resolvido remotamente',
+  encaminhado_fornecedor: 'Encaminhado ao fornecedor',
+}
 
-  return statusLabels[status] ?? status
+function controlledError(error: unknown): string {
+  if (
+    error instanceof Error
+    && /^(Não foi possível|O número de série)/i.test(error.message)
+  ) {
+    return error.message
+  }
+  return 'Não foi possível continuar o atendimento. Tente novamente.'
+}
+
+function formatMessageTime(createdAt: string): string {
+  const date = new Date(createdAt)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function formatDeadline(deadline: string, now: number): string {
+  const date = new Date(deadline)
+  if (Number.isNaN(date.getTime())) return 'Prazo de confirmação indisponível'
+
+  const time = new Intl.DateTimeFormat('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+  const minutes = Math.max(
+    0,
+    Math.min(30, Math.ceil((date.getTime() - now) / 60_000)),
+  )
+  return `Confirmação até ${time} · ${minutes > 0 ? `restam ${minutes} min` : 'prazo encerrado'}`
+}
+
+function isUrgentRouting(ticket: Ticket): boolean {
+  if (ticket.status !== 'encaminhado_fornecedor') return false
+  return ticket.messages.some(
+    ({ role, content }) => role === 'assistant'
+      && /urgên|sinal de risco|não manipule/i.test(content),
+  )
+}
+
+function MessageBubble({ item }: { item: Message }) {
+  return (
+    <li className={`chat-row chat-row-${item.role}`}>
+      <article className={`chat-bubble chat-bubble-${item.role}`}>
+        <p>{item.content}</p>
+        <time dateTime={item.created_at}>{formatMessageTime(item.created_at)}</time>
+      </article>
+    </li>
+  )
 }
 
 function Home() {
-  const [subject, setSubject] = useState('')
-  const [requests, setRequests] = useState<KickoffRequest[]>([])
-  const [submitting, setSubmitting] = useState(false)
+  const [ticket, setTicket] = useState<Ticket | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [text, setText] = useState('')
+  const [model, setModel] = useState('')
+  const [serial, setSerialValue] = useState('')
+  const [now, setNow] = useState(() => Date.now())
+  const chatEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    refreshRequests()
+    let active = true
+
+    async function startTicket() {
+      try {
+        const created = await createTicket(
+          DEMO_TICKET.nomePdv,
+          DEMO_TICKET.assunto,
+          DEMO_TICKET.descricaoBase,
+        )
+        const current = await getTicket(created.id)
+        if (active) {
+          setTicket(current)
+          if (current.equipment) {
+            setModel(current.equipment.modelo)
+            setSerialValue(current.equipment.numero_serie)
+          }
+        }
+      } catch (caught) {
+        if (active) setError(controlledError(caught))
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+
+    void startTicket()
+    return () => { active = false }
   }, [])
 
-  async function refreshRequests() {
-    try {
-      const list = await listKickoffRequests()
-      setRequests(list)
-    } catch (err) {
-      setError(getErrorMessage(err))
-    }
-  }
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView?.({ behavior: 'smooth' })
+  }, [ticket?.messages.length])
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!subject.trim() || submitting) return
+  useEffect(() => {
+    if (ticket?.status !== 'aguardando_confirmacao') return
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [ticket?.status])
 
-    setSubmitting(true)
+  async function runAction(action: () => Promise<unknown>) {
+    if (!ticket || busy) return
+    setBusy(true)
     setError(null)
     try {
-      await createKickoffRequest(subject.trim())
-      setSubject('')
-      await refreshRequests()
-    } catch (err) {
-      setError(getErrorMessage(err))
+      await action()
+      const current = await getTicket(ticket.id)
+      setTicket(current)
+      if (current.equipment) {
+        setModel(current.equipment.modelo)
+        setSerialValue(current.equipment.numero_serie)
+      }
+    } catch (caught) {
+      setError(controlledError(caught))
     } finally {
-      setSubmitting(false)
+      setBusy(false)
     }
   }
 
-  const sortedRequests = [...requests].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  )
+  function handleQuickReply(reply: string) {
+    void runAction(() => sendMessage(ticket?.id ?? '', reply))
+  }
+
+  function handleTextSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const content = text.trim()
+    if (!content) return
+    void runAction(async () => {
+      await sendMessage(ticket?.id ?? '', content)
+      setText('')
+    })
+  }
+
+  function handlePhoto(event: ChangeEvent<HTMLInputElement>) {
+    const photo = event.target.files?.[0]
+    if (!photo) return
+    void runAction(() => sendPhoto(ticket?.id ?? '', photo))
+    event.target.value = ''
+  }
+
+  function handleSerialSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const numeroSerie = serial.trim()
+    if (!numeroSerie) {
+      setError('O número de série é obrigatório.')
+      return
+    }
+    void runAction(() => sendSerial(ticket?.id ?? '', model.trim(), numeroSerie))
+  }
+
+  const finalTicket = ticket?.status === 'resolvido_remotamente'
+    || ticket?.status === 'encaminhado_fornecedor'
+  const needsManualSerial = ticket?.stage === 'aguardando_identificacao'
+    && ticket.equipment !== null
+    && (ticket.equipment.confianca < 0.8 || !ticket.equipment.numero_serie.trim())
+  const urgentRouting = ticket ? isUrgentRouting(ticket) : false
 
   return (
     <div className="home">
-      <Header />
+      <section className="phone-shell" aria-label="Atendimento CoolCare">
+        <Header />
 
-      <main className="home-main">
-        <h2 className="home-question">Bem-vindo(a) ao projeto template do</h2>
-        <h1 className="home-question">Hackaton SAZ - Grand Slam</h1>
-        <img className="home-image" src={hackathonImage} alt="Hackathon SAZ - Grand Slam" />
-        <p className="home-question">
-          Este template é um exemplo de aplicação completa que se conecta com backend, banco de dados e agentes CrewAI. <br /><br />
-          Teste esta aplicação digitando um assunto qualquer abaixo para começar! <br />
-          Não se esqueça de executar os 3 projetos (frontend, backend e agent) e incluir sua chave de API no arquivo agent/.env.
-        </p>
-
-        <form className="home-form" onSubmit={handleSubmit}>
-          <Input
-            className="home-input"
-            placeholder="Digite um assunto..."
-            value={subject}
-            onChange={(event) => setSubject(event.target.value)}
-          />
-          <Button type="submit" disabled={submitting || !subject.trim()}>
-            {submitting ? 'Consultando...' : 'Consultar'}
-          </Button>
-        </form>
-
-        {error && <p className="home-error">{error}</p>}
-
-        <section className="home-results">
-          <div className="home-results-header">
-            <h3>Resultados</h3>
-            <button
-              type="button"
-              className="home-refresh"
-              onClick={refreshRequests}
-              aria-label="Atualizar resultados"
-            >
-              <RefreshCw size={16} />
-              Atualizar
-            </button>
+        <div className="ticket-context">
+          <span className="ticket-context-icon" aria-hidden="true"><Store size={18} /></span>
+          <div>
+            <strong>{ticket?.nome_pdv ?? DEMO_TICKET.nomePdv}</strong>
+            <span>{ticket?.assunto ?? DEMO_TICKET.assunto}</span>
           </div>
+          {ticket && (
+            <span className={`status-pill status-pill-${ticket.status}`}>
+              {STATUS_LABELS[ticket.status]}
+            </span>
+          )}
+        </div>
 
-          {sortedRequests.length === 0 && <p className="home-empty">Ainda não há solicitações.</p>}
+        {ticket?.status === 'aguardando_confirmacao' && ticket.confirmation_deadline && (
+          <div className="deadline-strip" role="status">
+            <Clock3 size={16} aria-hidden="true" />
+            <span>{formatDeadline(ticket.confirmation_deadline, now)}</span>
+          </div>
+        )}
 
-          <ul className="home-results-list">
-            {sortedRequests.map((request) => (
-              <li key={request.id}>
-                <Card className="home-result-card">
-                  <div className="home-result-meta">
-                    <span className="home-result-id">{request.id}</span>
-                    <span className={`home-result-status home-result-status-${request.status}`}>
-                      {getStatusLabel(request.status)}
-                    </span>
-                  </div>
-                  <p className="home-result-subject">{request.input?.subject}</p>
-                  {request.result && <p className="home-result-text">{request.result}</p>}
-                  {request.error && <p className="home-result-error">{request.error}</p>}
-                </Card>
-              </li>
+        {urgentRouting && (
+          <div className="urgent-strip" role="status">
+            <AlertTriangle size={17} aria-hidden="true" />
+            <span>Aviso urgente: não manipule nem abra o equipamento.</span>
+          </div>
+        )}
+
+        <main className="chat-area" aria-live="polite">
+          {loading && (
+            <div className="loading-state">
+              <span className="loading-dot" />
+              Preparando atendimento…
+            </div>
+          )}
+
+          <ol className="message-list" aria-label="Mensagens do atendimento">
+            {ticket?.messages.map((item, index) => (
+              <MessageBubble
+                key={item.id ?? `${item.created_at}-${item.role}-${index}`}
+                item={item}
+              />
             ))}
-          </ul>
-        </section>
-      </main>
+          </ol>
 
-      <Footer />
+          {error && <p className="chat-error" role="alert">{error}</p>}
+
+          {ticket?.status === 'resolvido_remotamente' && (
+            <section className="result-card result-card-success" aria-label="Resultado do atendimento">
+              <CheckCircle2 size={30} aria-hidden="true" />
+              <div>
+                <span className="result-eyebrow">Atendimento concluído</span>
+                <h2>Resolvido remotamente</h2>
+                <p>Confirmação positiva registrada. Visita técnica evitada.</p>
+              </div>
+              <div className="saving-badge">
+                <span>Economia estimada</span>
+                <strong>R$ 200</strong>
+              </div>
+            </section>
+          )}
+
+          {ticket?.status === 'encaminhado_fornecedor' && (
+            <section
+              className={`result-card result-card-supplier${urgentRouting ? ' result-card-urgent' : ''}`}
+              aria-label="Resultado do atendimento"
+            >
+              {urgentRouting
+                ? <AlertTriangle size={30} aria-hidden="true" />
+                : <Wrench size={30} aria-hidden="true" />}
+              <div>
+                <span className="result-eyebrow">Próximo passo</span>
+                <h2>Encaminhado ao fornecedor</h2>
+                <p className="supplier-summary-title">Resumo para o fornecedor</p>
+                <dl className="supplier-summary">
+                  <div><dt>PDV</dt><dd>{ticket.nome_pdv}</dd></div>
+                  <div><dt>Chamado</dt><dd>{ticket.assunto}</dd></div>
+                  {ticket.equipment && (
+                    <div>
+                      <dt>Equipamento</dt>
+                      <dd>{ticket.equipment.modelo} · {ticket.equipment.numero_serie}</dd>
+                    </div>
+                  )}
+                </dl>
+                <p>Histórico, evidências e verificações realizadas seguem com o chamado.</p>
+              </div>
+            </section>
+          )}
+          <div ref={chatEndRef} />
+        </main>
+
+        {!loading && ticket && !finalTicket && (
+          <footer className="composer-area">
+            {ticket.stage === 'aguardando_proximidade' && (
+              <div className="quick-replies" aria-label="Respostas rápidas">
+                <button type="button" disabled={busy} onClick={() => handleQuickReply('Sim')}>Sim</button>
+                <button type="button" disabled={busy} onClick={() => handleQuickReply('Não')}>Não</button>
+              </div>
+            )}
+
+            {ticket.status === 'aguardando_confirmacao' && (
+              <div className="quick-replies" aria-label="Respostas rápidas">
+                <button type="button" disabled={busy} onClick={() => handleQuickReply('Sim, resolveu')}>
+                  Sim, resolveu
+                </button>
+                <button type="button" disabled={busy} onClick={() => handleQuickReply('Não')}>Não</button>
+              </div>
+            )}
+
+            {ticket.stage === 'aguardando_identificacao' && (
+              <div className="identification-tools">
+                <label className={`photo-button${busy ? ' photo-button-disabled' : ''}`}>
+                  <Camera size={18} aria-hidden="true" />
+                  Foto da etiqueta
+                  <input
+                    className="photo-input"
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    disabled={busy}
+                    onChange={handlePhoto}
+                  />
+                </label>
+
+                {needsManualSerial && (
+                  <form
+                    className="serial-form"
+                    aria-label="Serial manual"
+                    onSubmit={handleSerialSubmit}
+                  >
+                    <p>Leitura incerta. Confirme os dados da etiqueta:</p>
+                    <div className="serial-fields">
+                      <label>
+                        <span>Modelo</span>
+                        <input
+                          value={model}
+                          disabled={busy}
+                          onChange={(event) => setModel(event.target.value)}
+                        />
+                      </label>
+                      <label>
+                        <span>Número de série</span>
+                        <input
+                          value={serial}
+                          disabled={busy}
+                          required
+                          onChange={(event) => setSerialValue(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <button type="submit" disabled={busy || !serial.trim()}>
+                      Confirmar equipamento
+                    </button>
+                  </form>
+                )}
+              </div>
+            )}
+
+            <form className="message-composer" onSubmit={handleTextSubmit}>
+              <label className="sr-only" htmlFor="chat-message">Mensagem</label>
+              <input
+                id="chat-message"
+                value={text}
+                disabled={busy}
+                placeholder="Digite uma mensagem"
+                autoComplete="off"
+                onChange={(event) => setText(event.target.value)}
+              />
+              <button type="submit" disabled={busy || !text.trim()} aria-label={busy ? 'Enviando' : 'Enviar'}>
+                <Send size={19} aria-hidden="true" />
+              </button>
+            </form>
+          </footer>
+        )}
+      </section>
     </div>
   )
 }
