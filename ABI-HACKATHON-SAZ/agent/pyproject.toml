@@ -9,6 +9,9 @@ dependencies = [
     "fastapi[standard]>=0.139.2",
 ]
 
+[dependency-groups]
+dev = ["pytest>=8.4.0"]
+
 [project.scripts]
 kickoff = "workflow.main:kickoff"
 crew = "workflow.main:kickoff"

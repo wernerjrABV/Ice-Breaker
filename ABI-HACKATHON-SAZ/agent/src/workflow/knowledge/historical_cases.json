@@ -1,0 +1,7 @@
+[
+  {"symptom":"congela_bebidas","outcome":"resolvido_remotamente","action":"ajuste de temperatura"},
+  {"symptom":"porta_nao_fecha","outcome":"resolvido_remotamente","action":"remoção de obstrução"},
+  {"symptom":"nao_gela","outcome":"resolvido_remotamente","action":"liberação da ventilação externa"},
+  {"symptom":"nao_liga","outcome":"encaminhado_fornecedor","action":"verificação externa segura"},
+  {"symptom":"ruido_anormal","outcome":"encaminhado_fornecedor","action":"registro de evidência"}
+]
