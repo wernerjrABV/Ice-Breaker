@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from collections.abc import Collection
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -242,22 +243,35 @@ def get_ticket(ticket_id: str) -> dict[str, object] | None:
         return _ticket_from_row(conn, row)
 
 
-def list_expired_confirmations(now: datetime | None = None) -> list[dict[str, object]]:
+def list_expired_confirmations(
+    now: datetime | None = None,
+    ticket_ids: Collection[str] | None = None,
+) -> list[dict[str, object]]:
     """Return only confirmation-stage tickets whose UTC deadline has elapsed."""
     current = _as_utc(now) if now is not None else datetime.now(timezone.utc)
+    exact_ids = tuple(ticket_ids) if ticket_ids is not None else None
+    if exact_ids == ():
+        return []
+    id_filter = ""
+    params: list[str] = [
+        TicketStatus.WAITING_CONFIRMATION.value,
+        ConversationStage.CONFIRMATION.value,
+    ]
+    if exact_ids is not None:
+        placeholders = ", ".join("?" for _ in exact_ids)
+        id_filter = f" AND id IN ({placeholders})"
+        params.extend(exact_ids)
     with _connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT * FROM tickets
             WHERE status = ?
               AND stage = ?
               AND confirmation_deadline IS NOT NULL
+              {id_filter}
             ORDER BY confirmation_deadline, id
             """,
-            (
-                TicketStatus.WAITING_CONFIRMATION.value,
-                ConversationStage.CONFIRMATION.value,
-            ),
+            params,
         ).fetchall()
         expired = []
         for row in rows:

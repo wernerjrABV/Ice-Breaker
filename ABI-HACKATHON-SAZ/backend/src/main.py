@@ -112,7 +112,9 @@ def expire_confirmations(now: datetime | None = None) -> list[str]:
             status_code=403,
             detail="O parâmetro now só é aceito quando DEMO_MODE=true.",
         )
-    return service.expire_confirmations(now)
+    if now is not None:
+        return service.expire_confirmations(now, demo_data.DEMO_TICKET_IDS)
+    return service.expire_confirmations()
 
 
 @app.post("/demo/reset")

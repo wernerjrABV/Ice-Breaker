@@ -47,7 +47,7 @@ $env:DEMO_MODE = "true"
 uv run api
 ```
 
-`DEMO_MODE=true` permite somente que o roteiro passe um relógio acelerado à rota de expiração. Para execução normal, omita essa variável ou use `$env:DEMO_MODE = "false"`; o timeout continua sendo calculado pelo relógio real e permanece em 30 minutos.
+`DEMO_MODE=true` permite somente que o roteiro passe um relógio acelerado à rota de expiração. Esse relógio fornecido pelo cliente considera exclusivamente os quatro IDs fixos da demo e nunca expira outros chamados. Para execução normal, omita essa variável ou use `$env:DEMO_MODE = "false"`; sem o parâmetro `now`, a manutenção continua examinando todos os chamados legitimamente vencidos pelo relógio real, e o timeout permanece em 30 minutos.
 
 Terminal 3 — front-end em `http://localhost:5173`:
 
@@ -118,7 +118,7 @@ $expiredIds
 Invoke-RestMethod -Method Get -Uri "$api/tickets/DEMO-DOOR" | Select-Object status, outcome_reason
 ```
 
-O caso termina como `encaminhado_fornecedor`, com motivo `sem_confirmacao_pdv`, sem esperar 30 minutos e sem contabilizar saving. Sem o parâmetro `now`, a mesma rota sempre usa o relógio real; com `now` e `DEMO_MODE` desligado, ela responde HTTP 403.
+O caso termina como `encaminhado_fornecedor`, com motivo `sem_confirmacao_pdv`, sem esperar 30 minutos e sem contabilizar saving. O `now` acelerado só examina `DEMO-REMOTE`, `DEMO-DOOR`, `DEMO-SUPPLIER` e `DEMO-URGENT`. Sem o parâmetro `now`, a mesma rota usa o relógio real para todos os chamados vencidos; com `now` e `DEMO_MODE` desligado, ela responde HTTP 403. Um valor de `now` malformado responde HTTP 422.
 
 Execute `POST /demo/reset` novamente antes de repetir a apresentação.
 

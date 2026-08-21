@@ -1,6 +1,9 @@
+import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from src import db
+from src.models import ConversationStage, TicketStatus
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ DEMO_CASES = (
         "O PDV precisa relatar o sinal de risco durante a triagem.",
     ),
 )
+DEMO_TICKET_IDS = tuple(case.ticket_id for case in DEMO_CASES)
 
 
 def _opening(case: DemoCase) -> str:
@@ -47,38 +51,102 @@ def _opening(case: DemoCase) -> str:
     )
 
 
-def seed_demo_cases() -> list[str]:
-    """Insert missing presentation cases without changing an existing demo journey."""
-    ticket_ids = []
-    for case in DEMO_CASES:
-        ticket_ids.append(case.ticket_id)
-        if db.get_ticket(case.ticket_id) is not None:
-            continue
-        db.create_ticket(
+def _delete_case(conn: sqlite3.Connection, ticket_id: str) -> None:
+    conn.execute("DELETE FROM equipment WHERE ticket_id = ?", (ticket_id,))
+    conn.execute("DELETE FROM messages WHERE ticket_id = ?", (ticket_id,))
+    conn.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
+
+
+def _insert_case(conn: sqlite3.Connection, case: DemoCase) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO tickets (
+            id, nome_pdv, assunto, descricao_base, status, stage,
+            confirmation_deadline, priority, outcome_reason, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+        """,
+        (
             case.ticket_id,
             case.nome_pdv,
             case.assunto,
             case.descricao_base,
-        )
-        db.append_message(case.ticket_id, "assistant", _opening(case), "opening")
-    return ticket_ids
+            TicketStatus.TRIAGE.value,
+            ConversationStage.PROXIMITY.value,
+            "normal",
+            "",
+            now,
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO messages (ticket_id, role, content, kind, created_at)
+        VALUES (?, 'assistant', ?, 'opening', ?)
+        """,
+        (case.ticket_id, _opening(case), now),
+    )
+
+
+def _case_is_complete(conn: sqlite3.Connection, case: DemoCase) -> bool:
+    ticket = conn.execute(
+        """
+        SELECT nome_pdv, assunto, descricao_base
+        FROM tickets
+        WHERE id = ?
+        """,
+        (case.ticket_id,),
+    ).fetchone()
+    if ticket is None or tuple(ticket) != (
+        case.nome_pdv,
+        case.assunto,
+        case.descricao_base,
+    ):
+        return False
+    openings = conn.execute(
+        """
+        SELECT role, content, kind
+        FROM messages
+        WHERE ticket_id = ? AND kind = 'opening'
+        ORDER BY id
+        """,
+        (case.ticket_id,),
+    ).fetchall()
+    first_message = conn.execute(
+        """
+        SELECT role, content, kind
+        FROM messages
+        WHERE ticket_id = ?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (case.ticket_id,),
+    ).fetchone()
+    expected_opening = ("assistant", _opening(case), "opening")
+    return (
+        len(openings) == 1
+        and tuple(openings[0]) == expected_opening
+        and tuple(first_message) == expected_opening
+    )
+
+
+def seed_demo_cases() -> list[str]:
+    """Atomically insert missing cases and repair incomplete demo records."""
+    with db._connect() as conn:
+        for case in DEMO_CASES:
+            if _case_is_complete(conn, case):
+                continue
+            _delete_case(conn, case.ticket_id)
+            _insert_case(conn, case)
+    return list(DEMO_TICKET_IDS)
 
 
 def reset_demo_cases() -> list[str]:
-    """Remove only fixed demo IDs, then recreate their initial logical state."""
-    ticket_ids = [case.ticket_id for case in DEMO_CASES]
-    placeholders = ", ".join("?" for _ in ticket_ids)
+    """Atomically recreate the complete logical state for all fixed demo IDs."""
     with db._connect() as conn:
-        conn.execute(
-            f"DELETE FROM equipment WHERE ticket_id IN ({placeholders})",
-            ticket_ids,
-        )
-        conn.execute(
-            f"DELETE FROM messages WHERE ticket_id IN ({placeholders})",
-            ticket_ids,
-        )
-        conn.execute(
-            f"DELETE FROM tickets WHERE id IN ({placeholders})",
-            ticket_ids,
-        )
-    return seed_demo_cases()
+        for case in DEMO_CASES:
+            _delete_case(conn, case.ticket_id)
+        for case in DEMO_CASES:
+            _insert_case(conn, case)
+    return list(DEMO_TICKET_IDS)

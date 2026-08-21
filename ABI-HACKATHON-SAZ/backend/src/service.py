@@ -1,6 +1,7 @@
 import re
 import unicodedata
 import uuid
+from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -369,8 +370,11 @@ def handle_serial(ticket_id: str, modelo: str, numero_serie: str) -> dict[str, A
     return _diagnose(ticket_id)
 
 
-def expire_confirmations(now: datetime | None = None) -> list[str]:
-    expired = db.list_expired_confirmations(now)
+def expire_confirmations(
+    now: datetime | None = None,
+    ticket_ids: Collection[str] | None = None,
+) -> list[str]:
+    expired = db.list_expired_confirmations(now, ticket_ids)
     expired_ids = []
     for ticket in expired:
         ticket_id = str(ticket["id"])
