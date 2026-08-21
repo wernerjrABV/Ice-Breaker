@@ -24,7 +24,7 @@ def read_label(image_data_url: str, llm: Any = None) -> EquipmentLabel:
     ]
     result = (llm or _default_llm()).call(
         messages=messages,
-        response_format=EquipmentLabel,
+        response_model=EquipmentLabel,
     )
     label = EquipmentLabel.model_validate(result)
 
