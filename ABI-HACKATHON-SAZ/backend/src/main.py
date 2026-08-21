@@ -8,10 +8,11 @@ from typing import Any
 import requests
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from src import client, db, demo_data, service
 from src.client import call_agent_kickoff
+from src.models import EquipmentType, TicketResponse, TicketStatus
 
 
 @asynccontextmanager
@@ -34,6 +35,17 @@ class CreateTicketRequest(BaseModel):
     nome_pdv: str
     assunto: str
     descricao_base: str = ""
+    equipment_type: EquipmentType = EquipmentType.COOLER
+
+    @field_validator("equipment_type", mode="before")
+    @classmethod
+    def validate_equipment_type(cls, value: object) -> EquipmentType:
+        try:
+            return EquipmentType(str(value).strip().casefold())
+        except ValueError as exc:
+            raise ValueError(
+                "O tipo de equipamento deve ser cooler ou geladeira."
+            ) from exc
 
 
 class MessageRequest(BaseModel):
@@ -48,47 +60,78 @@ class SerialRequest(BaseModel):
 def _ticket_or_404(ticket_id: str) -> dict[str, Any]:
     ticket = db.get_ticket(ticket_id)
     if ticket is None:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise HTTPException(status_code=404, detail="Chamado não encontrado.")
     return ticket
 
 
-@app.post("/tickets", status_code=201)
-def create_ticket(request: CreateTicketRequest) -> dict[str, Any]:
-    return service.create_case(request.nome_pdv, request.assunto, request.descricao_base)
+def _present_ticket(ticket: dict[str, Any]) -> TicketResponse:
+    payload = dict(ticket)
+    payload["supplier_summary"] = (
+        service.supplier_summary(str(ticket["id"]))
+        if ticket["status"] == TicketStatus.SUPPLIER.value
+        else None
+    )
+    return TicketResponse.model_validate(payload)
 
 
-@app.get("/tickets/{ticket_id}")
-def get_ticket(ticket_id: str) -> dict[str, Any]:
-    return _ticket_or_404(ticket_id)
+@app.post("/tickets", status_code=201, response_model=TicketResponse)
+def create_ticket(request: CreateTicketRequest) -> TicketResponse:
+    try:
+        return _present_ticket(
+            service.create_case(
+                request.nome_pdv,
+                request.assunto,
+                request.descricao_base,
+                request.equipment_type,
+            )
+        )
+    except service.EquipmentScopeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.post("/tickets/{ticket_id}/messages")
-def post_message(ticket_id: str, request: MessageRequest) -> dict[str, Any]:
+@app.get("/tickets/{ticket_id}", response_model=TicketResponse)
+def get_ticket(ticket_id: str) -> TicketResponse:
+    return _present_ticket(_ticket_or_404(ticket_id))
+
+
+@app.post("/tickets/{ticket_id}/messages", response_model=TicketResponse)
+def post_message(ticket_id: str, request: MessageRequest) -> TicketResponse:
     _ticket_or_404(ticket_id)
     try:
-        return service.handle_text(ticket_id, request.content)
+        return _present_ticket(service.handle_text(ticket_id, request.content))
+    except service.EquipmentScopeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except service.InvalidTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except service.AgentResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Agent API call failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"Falha ao consultar a API do agente: {exc}",
+        ) from exc
 
 
-@app.post("/tickets/{ticket_id}/equipment/serial")
-def post_serial(ticket_id: str, request: SerialRequest) -> dict[str, Any]:
+@app.post("/tickets/{ticket_id}/equipment/serial", response_model=TicketResponse)
+def post_serial(ticket_id: str, request: SerialRequest) -> TicketResponse:
     _ticket_or_404(ticket_id)
     try:
-        return service.handle_serial(ticket_id, request.modelo, request.numero_serie)
+        return _present_ticket(
+            service.handle_serial(ticket_id, request.modelo, request.numero_serie)
+        )
+    except service.EquipmentScopeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except service.InvalidTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.post("/tickets/{ticket_id}/equipment/photo")
+@app.post("/tickets/{ticket_id}/equipment/photo", response_model=TicketResponse)
 async def post_photo(
     ticket_id: str,
     photo: UploadFile = File(...),
-) -> dict[str, Any]:
+) -> TicketResponse:
     _ticket_or_404(ticket_id)
     try:
         service.require_identification(ticket_id)
@@ -101,8 +144,14 @@ async def post_photo(
     try:
         label = client.read_equipment_label(image_data_url)
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Agent API call failed: {exc}") from exc
-    return service.handle_label(ticket_id, label, photo.filename)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Falha ao consultar a API do agente: {exc}",
+        ) from exc
+    try:
+        return _present_ticket(service.handle_label(ticket_id, label, photo.filename))
+    except service.EquipmentScopeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/maintenance/expire-confirmations")
@@ -127,7 +176,10 @@ def kickoff(inputs: dict[str, Any]) -> Any:
     try:
         return call_agent_kickoff(inputs)
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Agent API call failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"Falha ao consultar a API do agente: {exc}",
+        ) from exc
 
 
 @app.post("/kickoff/async", status_code=202)
@@ -147,7 +199,7 @@ def kickoff_async_list() -> list[dict[str, Any]]:
 def kickoff_async_status(request_id: str) -> dict[str, Any]:
     record = db.get_request(request_id)
     if record is None:
-        raise HTTPException(status_code=404, detail="Request not found")
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
     return record
 
 

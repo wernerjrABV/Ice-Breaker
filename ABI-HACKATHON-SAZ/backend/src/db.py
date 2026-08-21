@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import ConversationStage, TicketStatus
+from .models import ConversationStage, EquipmentType, TicketStatus
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "backend.db"
 
@@ -40,6 +40,7 @@ def init_db() -> None:
                 nome_pdv TEXT NOT NULL,
                 assunto TEXT NOT NULL,
                 descricao_base TEXT NOT NULL,
+                equipment_type TEXT NOT NULL DEFAULT 'cooler',
                 status TEXT NOT NULL,
                 stage TEXT NOT NULL,
                 confirmation_deadline TEXT,
@@ -50,6 +51,15 @@ def init_db() -> None:
             )
             """
         )
+        ticket_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(tickets)").fetchall()
+        }
+        if "equipment_type" not in ticket_columns:
+            conn.execute(
+                "ALTER TABLE tickets ADD COLUMN "
+                "equipment_type TEXT NOT NULL DEFAULT 'cooler'"
+            )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS messages (
@@ -75,6 +85,17 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS checklist_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (ticket_id) REFERENCES tickets(id)
+            )
+            """
+        )
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -92,22 +113,29 @@ def _datetime_iso(value: datetime | None) -> str | None:
     return _as_utc(value).isoformat() if value is not None else None
 
 
-def create_ticket(ticket_id: str, nome_pdv: str, assunto: str, descricao_base: str) -> None:
+def create_ticket(
+    ticket_id: str,
+    nome_pdv: str,
+    assunto: str,
+    descricao_base: str,
+    equipment_type: EquipmentType = EquipmentType.COOLER,
+) -> None:
     now = _now_iso()
     with _connect() as conn:
         conn.execute(
             """
             INSERT INTO tickets (
-                id, nome_pdv, assunto, descricao_base, status, stage,
+                id, nome_pdv, assunto, descricao_base, equipment_type, status, stage,
                 confirmation_deadline, priority, outcome_reason, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
             """,
             (
                 ticket_id,
                 nome_pdv,
                 assunto,
                 descricao_base,
+                equipment_type.value,
                 TicketStatus.TRIAGE.value,
                 ConversationStage.PROXIMITY.value,
                 "normal",
@@ -159,6 +187,28 @@ def set_equipment(
         )
 
 
+def record_checklist_actions(ticket_id: str, actions: Collection[str]) -> None:
+    """Persist each backend-approved checklist action as structured evidence."""
+    safe_actions = tuple(str(action).strip() for action in actions if str(action).strip())
+    now = _now_iso()
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM checklist_actions WHERE ticket_id = ?",
+            (ticket_id,),
+        )
+        conn.executemany(
+            """
+            INSERT INTO checklist_actions (ticket_id, content, created_at)
+            VALUES (?, ?, ?)
+            """,
+            ((ticket_id, action, now) for action in safe_actions),
+        )
+        conn.execute(
+            "UPDATE tickets SET updated_at = ? WHERE id = ?",
+            (now, ticket_id),
+        )
+
+
 def set_ticket_state(
     ticket_id: str,
     status: TicketStatus,
@@ -201,11 +251,21 @@ def _ticket_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, ob
         """,
         (row["id"],),
     ).fetchall()
+    checklist_actions = conn.execute(
+        """
+        SELECT content
+        FROM checklist_actions
+        WHERE ticket_id = ?
+        ORDER BY id
+        """,
+        (row["id"],),
+    ).fetchall()
     return {
         "id": row["id"],
         "nome_pdv": row["nome_pdv"],
         "assunto": row["assunto"],
         "descricao_base": row["descricao_base"],
+        "equipment_type": row["equipment_type"],
         "status": row["status"],
         "stage": row["stage"],
         "confirmation_deadline": row["confirmation_deadline"],
@@ -232,6 +292,7 @@ def _ticket_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, ob
             }
             for message in messages
         ],
+        "checklist_actions": [action["content"] for action in checklist_actions],
     }
 
 
@@ -249,7 +310,10 @@ def list_expired_confirmations(
 ) -> list[dict[str, object]]:
     """Return only confirmation-stage tickets whose UTC deadline has elapsed."""
     current = _as_utc(now) if now is not None else datetime.now(timezone.utc)
-    exact_ids = tuple(ticket_ids) if ticket_ids is not None else None
+    if isinstance(ticket_ids, str):
+        exact_ids = (ticket_ids,)
+    else:
+        exact_ids = tuple(ticket_ids) if ticket_ids is not None else None
     if exact_ids == ():
         return []
     id_filter = ""

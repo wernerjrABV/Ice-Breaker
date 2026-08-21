@@ -40,9 +40,13 @@ _REMOTE_CHECKLISTS: dict[Symptom, list[str]] = {
         "Verifique se há gelo visível impedindo o fechamento.",
     ],
     Symptom.NOT_COOLING: [
-        "Verifique o ajuste de temperatura.",
-        "Confira se há obstrução ou se a organização interna está adequada.",
         "Confira se a ventilação externa está livre.",
+        "Verifique se a porta fecha completamente.",
+        "Verifique o ajuste de temperatura.",
+        "Observe se há gelo visível bloqueando a circulação.",
+    ],
+    Symptom.NOT_POWERING_ON: [
+        "Observe, sem tocar no cabo, plugue ou tomada, se o plugue externo está conectado.",
     ],
 }
 
@@ -68,7 +72,7 @@ def decide_triage(symptom: Symptom, risks: set[RiskFlag]) -> TriageDecision:
             reason="Risco crítico identificado.",
         )
 
-    if symptom in {Symptom.ABNORMAL_NOISE, Symptom.NOT_POWERING_ON}:
+    if symptom is Symptom.ABNORMAL_NOISE:
         return TriageDecision(
             outcome=Outcome.SUPPLIER,
             reason="Sintoma requer encaminhamento ao fornecedor.",

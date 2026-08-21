@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from src import db
-from src.models import ConversationStage, TicketStatus
+from src.models import ConversationStage, EquipmentType, TicketStatus
 
 
 @dataclass(frozen=True)
@@ -12,6 +12,7 @@ class DemoCase:
     nome_pdv: str
     assunto: str
     descricao_base: str
+    equipment_type: EquipmentType
 
 
 DEMO_CASES = (
@@ -20,24 +21,28 @@ DEMO_CASES = (
         "Mercado Central",
         "Congela bebidas",
         "As bebidas estão congelando dentro do cooler.",
+        EquipmentType.COOLER,
     ),
     DemoCase(
         "DEMO-DOOR",
         "Bar do João",
         "Porta não fecha",
         "A porta do cooler não permanece fechada.",
+        EquipmentType.COOLER,
     ),
     DemoCase(
         "DEMO-SUPPLIER",
         "Padaria Primavera",
         "Não liga",
         "O cooler não liga.",
+        EquipmentType.COOLER,
     ),
     DemoCase(
         "DEMO-URGENT",
         "Conveniência Estação",
         "Cheiro de queimado",
         "O PDV precisa relatar o sinal de risco durante a triagem.",
+        EquipmentType.COOLER,
     ),
 )
 DEMO_TICKET_IDS = tuple(case.ticket_id for case in DEMO_CASES)
@@ -52,6 +57,7 @@ def _opening(case: DemoCase) -> str:
 
 
 def _delete_case(conn: sqlite3.Connection, ticket_id: str) -> None:
+    conn.execute("DELETE FROM checklist_actions WHERE ticket_id = ?", (ticket_id,))
     conn.execute("DELETE FROM equipment WHERE ticket_id = ?", (ticket_id,))
     conn.execute("DELETE FROM messages WHERE ticket_id = ?", (ticket_id,))
     conn.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
@@ -62,16 +68,17 @@ def _insert_case(conn: sqlite3.Connection, case: DemoCase) -> None:
     conn.execute(
         """
         INSERT INTO tickets (
-            id, nome_pdv, assunto, descricao_base, status, stage,
+            id, nome_pdv, assunto, descricao_base, equipment_type, status, stage,
             confirmation_deadline, priority, outcome_reason, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
         """,
         (
             case.ticket_id,
             case.nome_pdv,
             case.assunto,
             case.descricao_base,
+            case.equipment_type.value,
             TicketStatus.TRIAGE.value,
             ConversationStage.PROXIMITY.value,
             "normal",
@@ -92,7 +99,7 @@ def _insert_case(conn: sqlite3.Connection, case: DemoCase) -> None:
 def _case_is_complete(conn: sqlite3.Connection, case: DemoCase) -> bool:
     ticket = conn.execute(
         """
-        SELECT nome_pdv, assunto, descricao_base
+        SELECT nome_pdv, assunto, descricao_base, equipment_type
         FROM tickets
         WHERE id = ?
         """,
@@ -102,6 +109,7 @@ def _case_is_complete(conn: sqlite3.Connection, case: DemoCase) -> bool:
         case.nome_pdv,
         case.assunto,
         case.descricao_base,
+        case.equipment_type.value,
     ):
         return False
     openings = conn.execute(

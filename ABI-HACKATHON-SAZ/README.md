@@ -10,7 +10,7 @@ Front-end :5173 → Back-end :8001 → Agente :8000
 
 - Python compatível com cada `pyproject.toml` (o agente aceita 3.10 até 3.13; o back-end requer 3.13 ou superior)
 - [uv](https://docs.astral.sh/uv/)
-- Node.js e npm
+- Node.js 22 ou superior e npm (validado com Node.js 24.18.0)
 
 Os comandos abaixo são para Windows PowerShell e partem da pasta `ABI-HACKATHON-SAZ`.
 
@@ -24,7 +24,7 @@ Copy-Item backend/.env.example backend/.env
 Copy-Item frontend/.env.example frontend/.env
 ```
 
-Edite `agent/.env` e substitua o valor de exemplo de `OPENAI_API_KEY`. Confirme também o `OPENAI_MODEL`. Os exemplos do back-end e do front-end já apontam para as portas locais padrão. Nunca versione os arquivos `.env` nem cole a chave em comandos, logs ou capturas de tela.
+Edite `agent/.env` e substitua o valor de exemplo de `OPENAI_API_KEY`. `OPENAI_MODEL` configura tanto a leitura de etiqueta quanto a intenção estruturada da conversa; quando a variável está ausente ou vazia, os dois adaptadores usam `openai/gpt-4o-mini`, compatível com o CrewAI 1.3.0 fixado no projeto. O arquivo de exemplo explicita esse mesmo padrão. Os exemplos do back-end e do front-end já apontam para as portas locais padrão. Nunca versione os arquivos `.env` nem cole a chave em comandos, logs ou capturas de tela.
 
 ## Iniciar os serviços
 
@@ -86,6 +86,7 @@ Abra o chamado e avance pela proximidade, identificação e confirmação positi
 Invoke-RestMethod -Method Get -Uri "$api/tickets/DEMO-REMOTE"
 Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-REMOTE/messages" -ContentType "application/json" -Body (@{ content = "sim" } | ConvertTo-Json)
 Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-REMOTE/equipment/serial" -ContentType "application/json" -Body (@{ modelo = "CX-400"; numero_serie = "BR-DEMO-001" } | ConvertTo-Json)
+Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-REMOTE/messages" -ContentType "application/json" -Body (@{ content = "sim, os dados estão corretos" } | ConvertTo-Json)
 $remote = Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-REMOTE/messages" -ContentType "application/json" -Body (@{ content = "sim, resolveu" } | ConvertTo-Json)
 $remote.status
 ```
@@ -110,7 +111,8 @@ Coloque `DEMO-DOOR` em confirmação pendente e passe um instante posterior ao d
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-DOOR/messages" -ContentType "application/json" -Body (@{ content = "sim" } | ConvertTo-Json)
-$waiting = Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-DOOR/equipment/serial" -ContentType "application/json" -Body (@{ modelo = "CX-400"; numero_serie = "BR-DEMO-002" } | ConvertTo-Json)
+Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-DOOR/equipment/serial" -ContentType "application/json" -Body (@{ modelo = "CX-400"; numero_serie = "BR-DEMO-002" } | ConvertTo-Json)
+$waiting = Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-DOOR/messages" -ContentType "application/json" -Body (@{ content = "sim, os dados estão corretos" } | ConvertTo-Json)
 $demoNow = [DateTimeOffset]::Parse($waiting.confirmation_deadline).AddSeconds(1).ToString("o")
 $encodedNow = [Uri]::EscapeDataString($demoNow)
 $expiredIds = Invoke-RestMethod -Method Post -Uri "$api/maintenance/expire-confirmations?now=$encodedNow"

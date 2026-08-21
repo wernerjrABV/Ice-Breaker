@@ -2,7 +2,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { Message, Ticket } from '../../clients/client'
+import type { Message, SupplierSummary, Ticket } from '../../clients/client'
 import Home from './Home'
 
 const client = vi.hoisted(() => ({
@@ -35,12 +35,14 @@ function ticket(overrides: Partial<Ticket> = {}): Ticket {
     nome_pdv: 'Bar do João',
     assunto: 'Congela bebidas',
     descricao_base: 'Bebidas congelando',
+    equipment_type: 'cooler',
     status: 'em_triagem',
     stage: 'aguardando_proximidade',
     confirmation_deadline: null,
     priority: 'normal',
     outcome_reason: '',
     equipment: null,
+    supplier_summary: null,
     messages: [
       message(
         'assistant',
@@ -48,6 +50,37 @@ function ticket(overrides: Partial<Ticket> = {}): Ticket {
         'opening',
       ),
     ],
+    ...overrides,
+  }
+}
+
+function supplierSummary(
+  overrides: Partial<SupplierSummary> = {},
+): SupplierSummary {
+  return {
+    ticket_id: 'T-1',
+    nome_pdv: 'Bar do João',
+    assunto: 'Não gela',
+    equipamento: {
+      tipo: 'cooler',
+      modelo: 'CX-400',
+      numero_serie: 'BR-12345',
+      confianca: 0.98,
+      foto_etiqueta: 'etiqueta.jpg',
+    },
+    evidencias: [
+      { tipo: 'descricao_inicial', descricao: 'Temperatura alta' },
+      { tipo: 'relato_pdv', descricao: 'Não resolveu' },
+      { tipo: 'foto_etiqueta', descricao: 'etiqueta.jpg' },
+    ],
+    acoes_tentadas: [
+      'Confira se a ventilação externa está livre.',
+      'Verifique se a porta fecha completamente.',
+      'Verifique o ajuste de temperatura.',
+      'Observe se há gelo visível bloqueando a circulação.',
+    ],
+    prioridade: 'normal',
+    motivo: 'problema_persistiu_apos_checklist',
     ...overrides,
   }
 }
@@ -65,18 +98,33 @@ const identificationTicket = ticket({
   ],
 })
 
-const waitingTicket = ticket({
-  status: 'aguardando_confirmacao',
-  stage: 'aguardando_confirmacao',
-  confirmation_deadline: confirmationDeadline,
+const equipmentConfirmationTicket = ticket({
+  stage: 'aguardando_confirmacao_equipamento',
   equipment: {
     modelo: 'CX-400',
     numero_serie: 'BR-12345',
     confianca: 0.98,
     image_name: 'etiqueta.jpg',
   },
+  outcome_reason: 'identificacao_aguardando_confirmacao',
   messages: [
     ...identificationTicket.messages,
+    message(
+      'assistant',
+      'Confira o modelo e o número de série exibidos. Os dados estão corretos?',
+      'identification',
+    ),
+  ],
+})
+
+const waitingTicket = ticket({
+  status: 'aguardando_confirmacao',
+  stage: 'aguardando_confirmacao',
+  confirmation_deadline: confirmationDeadline,
+  equipment: equipmentConfirmationTicket.equipment,
+  messages: [
+    ...equipmentConfirmationTicket.messages,
+    message('user', 'Sim, dados corretos', 'text'),
     message(
       'assistant',
       'Siga estas verificações seguras: 1. Ajuste a temperatura. O cooler voltou a funcionar corretamente?',
@@ -121,6 +169,7 @@ test('starts with the proactive message and asks for equipment identification', 
     'Bar do João',
     'Congela bebidas',
     'Bebidas congelando',
+    'cooler',
   )
   expect(screen.queryByText('Resposta transitória da ação.')).not.toBeInTheDocument()
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
@@ -223,6 +272,40 @@ test('shows remote saving only after positive confirmation', async () => {
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
 })
 
+test('retains the successful final-confirmation POST when the refresh fails', async () => {
+  const user = userEvent.setup()
+  const resolvedTicket = ticket({
+    status: 'resolvido_remotamente',
+    stage: 'finalizado',
+    outcome_reason: 'confirmacao_positiva_pdv',
+    equipment: waitingTicket.equipment,
+    messages: [
+      ...waitingTicket.messages,
+      message('user', 'Sim, resolveu', 'text'),
+      message('assistant', 'Chamado resolvido remotamente.', 'resolution'),
+    ],
+  })
+  client.getTicket
+    .mockResolvedValueOnce(waitingTicket)
+    .mockRejectedValueOnce(new Error('Não foi possível obter o ticket: erro de rede'))
+    .mockResolvedValueOnce(resolvedTicket)
+  client.sendMessage.mockResolvedValue(resolvedTicket)
+
+  render(<Home />)
+  await screen.findByText(/aguardando confirmação/i)
+  await user.click(screen.getByRole('button', { name: /sim, resolveu/i }))
+
+  expect(
+    await screen.findByRole('heading', { name: /resolvido remotamente/i }),
+  ).toBeInTheDocument()
+  expect(screen.getByText(/R\$ 200/)).toBeInTheDocument()
+  expect(await screen.findByRole('alert')).toHaveTextContent(/obter o ticket.*rede/i)
+
+  await user.click(screen.getByRole('button', { name: /tentar atualizar/i }))
+  expect(client.createTicket).toHaveBeenCalledTimes(1)
+  expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1'], ['T-1']])
+})
+
 test('shows supplier routing summary without remote saving', async () => {
   const user = userEvent.setup()
   const supplierTicket = ticket({
@@ -230,6 +313,7 @@ test('shows supplier routing summary without remote saving', async () => {
     stage: 'finalizado',
     outcome_reason: 'problema_persistiu_apos_checklist',
     equipment: waitingTicket.equipment,
+    supplier_summary: supplierSummary(),
     messages: [
       ...waitingTicket.messages,
       message('user', 'Não', 'text'),
@@ -253,6 +337,10 @@ test('shows supplier routing summary without remote saving', async () => {
     await screen.findByRole('heading', { name: /encaminhado ao fornecedor/i }),
   ).toBeInTheDocument()
   expect(screen.getByText(/CX-400.*BR-12345/i)).toBeInTheDocument()
+  expect(screen.getByText('Confira se a ventilação externa está livre.')).toBeInTheDocument()
+  expect(screen.getByText('etiqueta.jpg')).toBeInTheDocument()
+  expect(screen.getByText('problema_persistiu_apos_checklist')).toBeInTheDocument()
+  expect(screen.queryByText(/histórico, evidências.*seguem/i)).not.toBeInTheDocument()
   expect(screen.queryByText(/R\$ 200/)).not.toBeInTheDocument()
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
 })
@@ -278,6 +366,10 @@ test.each([
     stage: 'finalizado',
     priority,
     outcome_reason: priority === 'urgente' ? 'risco_critico' : 'atendimento_tecnico',
+    supplier_summary: supplierSummary({
+      prioridade: priority,
+      motivo: priority === 'urgente' ? 'Risco crítico identificado.' : 'atendimento_tecnico',
+    }),
     messages: [message('assistant', routingMessage, 'routing')],
   })
   client.getTicket.mockResolvedValue(supplierTicket)
@@ -293,6 +385,38 @@ test.each([
     expect(urgentWarning).not.toBeInTheDocument()
     expect(screen.getByLabelText('Resultado do atendimento')).not.toHaveClass('result-card-urgent')
   }
+})
+
+test('renders urgent supplier evidence when equipment is not yet identified', async () => {
+  client.getTicket.mockResolvedValue(ticket({
+    nome_pdv: 'Conveniência Estação',
+    assunto: 'Cheiro a queimado',
+    descricao_base: 'Odor forte vindo do cooler',
+    status: 'encaminhado_fornecedor',
+    stage: 'finalizado',
+    priority: 'urgente',
+    outcome_reason: 'Risco crítico identificado.',
+    equipment: null,
+    supplier_summary: supplierSummary({
+      nome_pdv: 'Conveniência Estação',
+      assunto: 'Cheiro a queimado',
+      equipamento: null,
+      evidencias: [
+        { tipo: 'descricao_inicial', descricao: 'Odor forte vindo do cooler' },
+      ],
+      acoes_tentadas: [],
+      prioridade: 'urgente',
+      motivo: 'Risco crítico identificado.',
+    }),
+  }))
+
+  render(<Home />)
+
+  await screen.findByRole('heading', { name: /encaminhado ao fornecedor/i })
+  expect(screen.getByText('Odor forte vindo do cooler')).toBeInTheDocument()
+  expect(screen.getByText('Risco crítico identificado.')).toBeInTheDocument()
+  expect(screen.getByText(/prioridade urgente/i)).toBeInTheDocument()
+  expect(screen.queryByText(/histórico, evidências.*seguem/i)).not.toBeInTheDocument()
 })
 
 test('updates the visual confirmation countdown while waiting', async () => {
@@ -325,6 +449,7 @@ test('expires the deadline once, disables confirmation, and refreshes the suppli
     stage: 'finalizado',
     outcome_reason: 'sem_confirmacao_pdv',
     equipment: waitingTicket.equipment,
+    supplier_summary: supplierSummary({ motivo: 'sem_confirmacao_pdv' }),
     messages: [
       ...waitingTicket.messages,
       message(
@@ -362,6 +487,48 @@ test('expires the deadline once, disables confirmation, and refreshes the suppli
   expect(client.expireConfirmations).toHaveBeenCalledTimes(1)
 })
 
+test('retries a no-op expiry with bounded backoff and no concurrent duplicate', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime('2026-08-21T12:00:00Z')
+  const beforeExpiry = {
+    ...waitingTicket,
+    confirmation_deadline: '2026-08-21T12:00:01Z',
+  }
+  const afterExpiry = ticket({
+    status: 'encaminhado_fornecedor',
+    stage: 'finalizado',
+    outcome_reason: 'sem_confirmacao_pdv',
+    equipment: waitingTicket.equipment,
+    supplier_summary: supplierSummary({ motivo: 'sem_confirmacao_pdv' }),
+  })
+  let finishFirstExpiry: ((ticketIds: string[]) => void) | undefined
+  client.getTicket
+    .mockResolvedValueOnce(beforeExpiry)
+    .mockResolvedValueOnce(beforeExpiry)
+    .mockResolvedValueOnce(afterExpiry)
+  client.expireConfirmations
+    .mockImplementationOnce(
+      () => new Promise<string[]>((resolve) => { finishFirstExpiry = resolve }),
+    )
+    .mockResolvedValueOnce(['T-1'])
+
+  render(<Home />)
+  await act(async () => undefined)
+  act(() => vi.advanceTimersByTime(1_000))
+  expect(client.expireConfirmations).toHaveBeenCalledTimes(1)
+  act(() => vi.advanceTimersByTime(30_000))
+  expect(client.expireConfirmations).toHaveBeenCalledTimes(1)
+
+  await act(async () => { finishFirstExpiry?.([]) })
+  expect(screen.getByText(/prazo encerrado/i)).toBeInTheDocument()
+  await act(async () => { vi.advanceTimersByTime(1_000) })
+
+  expect(client.expireConfirmations).toHaveBeenCalledTimes(2)
+  expect(
+    screen.getByRole('heading', { name: /encaminhado ao fornecedor/i }),
+  ).toBeInTheDocument()
+})
+
 test('offers manual serial after a photo has OCR confidence below 0.80', async () => {
   const user = userEvent.setup()
   const uncertainTicket = ticket({
@@ -384,9 +551,11 @@ test('offers manual serial after a photo has OCR confidence below 0.80', async (
   client.getTicket
     .mockResolvedValueOnce(identificationTicket)
     .mockResolvedValueOnce(uncertainTicket)
+    .mockResolvedValueOnce(equipmentConfirmationTicket)
     .mockResolvedValueOnce(waitingTicket)
   client.sendPhoto.mockResolvedValue(identificationTicket)
   client.sendSerial.mockResolvedValue(uncertainTicket)
+  client.sendMessage.mockResolvedValue(equipmentConfirmationTicket)
 
   render(<Home />)
 
@@ -408,8 +577,124 @@ test('offers manual serial after a photo has OCR confidence below 0.80', async (
   await waitFor(() => {
     expect(client.sendSerial).toHaveBeenCalledWith('T-1', 'CX-400', 'BR-12345')
   })
+  expect(
+    await screen.findByRole('region', { name: /confirmação do equipamento/i }),
+  ).toHaveTextContent('CX-400')
+  expect(screen.getByText(/BR-12345/i)).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: /sim, dados corretos/i }))
   expect(await screen.findByText(/aguardando confirmação/i)).toBeInTheDocument()
+  expect(client.getTicket.mock.calls).toEqual([
+    ['T-1'],
+    ['T-1'],
+    ['T-1'],
+    ['T-1'],
+  ])
+})
+
+test('retains successful serial confirmation and retries only the existing ticket refresh', async () => {
+  const user = userEvent.setup()
+  const uncertainTicket = ticket({
+    stage: 'aguardando_identificacao',
+    equipment: {
+      modelo: 'CX-ANTIGO',
+      numero_serie: '',
+      confianca: 0.20,
+      image_name: 'foto-etiqueta.jpg',
+    },
+    outcome_reason: 'identificacao_manual_necessaria',
+  })
+  const correctedTicket = ticket({
+    stage: 'aguardando_confirmacao_equipamento',
+    equipment: {
+      modelo: 'CX-400',
+      numero_serie: 'BR-MANUAL',
+      confianca: 1,
+      image_name: 'foto-etiqueta.jpg',
+    },
+  })
+  client.getTicket
+    .mockResolvedValueOnce(uncertainTicket)
+    .mockRejectedValueOnce(new Error('Não foi possível obter o ticket: 503'))
+    .mockResolvedValueOnce(correctedTicket)
+  client.sendSerial.mockResolvedValue(correctedTicket)
+
+  render(<Home />)
+  await screen.findByRole('form', { name: /serial manual/i })
+  await user.clear(screen.getByLabelText(/^modelo$/i))
+  await user.type(screen.getByLabelText(/^modelo$/i), 'CX-400')
+  await user.type(screen.getByLabelText(/número de série/i), 'BR-MANUAL')
+  await user.click(screen.getByRole('button', { name: /confirmar equipamento/i }))
+
+  const confirmation = await screen.findByRole('region', {
+    name: /confirmação do equipamento/i,
+  })
+  expect(confirmation).toHaveTextContent('BR-MANUAL')
+  expect(confirmation).toHaveTextContent('foto-etiqueta.jpg')
+  expect(await screen.findByRole('alert')).toHaveTextContent(/obter o ticket.*503/i)
+
+  await user.click(screen.getByRole('button', { name: /tentar atualizar/i }))
+  expect(client.createTicket).toHaveBeenCalledTimes(1)
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1'], ['T-1']])
+})
+
+test('shows confident OCR data and requires explicit confirmation', async () => {
+  const user = userEvent.setup()
+  client.getTicket
+    .mockResolvedValueOnce(identificationTicket)
+    .mockResolvedValueOnce(equipmentConfirmationTicket)
+    .mockResolvedValueOnce(waitingTicket)
+  client.sendPhoto.mockResolvedValue(equipmentConfirmationTicket)
+  client.sendMessage.mockResolvedValue(waitingTicket)
+
+  render(<Home />)
+
+  await user.upload(
+    await screen.findByLabelText(/foto da etiqueta/i),
+    new File(['image'], 'etiqueta.jpg', { type: 'image/jpeg' }),
+  )
+  const confirmation = await screen.findByRole('region', {
+    name: /confirmação do equipamento/i,
+  })
+  expect(confirmation).toHaveTextContent('CX-400')
+  expect(confirmation).toHaveTextContent('BR-12345')
+  expect(screen.queryByText(/aguardando confirmação$/i)).not.toBeInTheDocument()
+
+  await user.click(screen.getByRole('button', { name: /sim, dados corretos/i }))
+
+  expect(client.sendMessage).toHaveBeenCalledWith('T-1', 'Sim, dados corretos')
+  expect(await screen.findByText(/aguardando confirmação/i)).toBeInTheDocument()
+})
+
+test('negative equipment confirmation reopens manual correction', async () => {
+  const user = userEvent.setup()
+  const correctionTicket = ticket({
+    stage: 'aguardando_identificacao',
+    outcome_reason: 'correcao_identificacao_necessaria',
+    equipment: equipmentConfirmationTicket.equipment,
+    messages: [
+      ...equipmentConfirmationTicket.messages,
+      message('user', 'Não, corrigir', 'text'),
+      message(
+        'assistant',
+        'Certo. Corrija o modelo e o número de série antes de continuar.',
+        'identification',
+      ),
+    ],
+  })
+  client.getTicket
+    .mockResolvedValueOnce(equipmentConfirmationTicket)
+    .mockResolvedValueOnce(correctionTicket)
+  client.sendMessage.mockResolvedValue(correctionTicket)
+
+  render(<Home />)
+  await screen.findByRole('region', { name: /confirmação do equipamento/i })
+
+  await user.click(screen.getByRole('button', { name: /não, corrigir/i }))
+
+  expect(client.sendMessage).toHaveBeenCalledWith('T-1', 'Não, corrigir')
+  expect(await screen.findByRole('form', { name: /serial manual/i })).toBeInTheDocument()
+  expect(screen.getByLabelText(/^modelo$/i)).toHaveValue('CX-400')
+  expect(screen.getByLabelText(/número de série/i)).toHaveValue('BR-12345')
 })
 
 test('disables conversation controls while a request is in progress', async () => {

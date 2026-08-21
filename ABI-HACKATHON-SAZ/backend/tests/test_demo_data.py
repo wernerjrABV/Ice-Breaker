@@ -37,6 +37,10 @@ def test_seed_creates_four_repeatable_demo_cases(tmp_path, monkeypatch):
     assert [db.get_ticket(ticket_id)["assunto"] for ticket_id in first] == [
         subject for _, subject in EXPECTED_DEMO_CASES
     ]
+    assert all(
+        db.get_ticket(ticket_id)["equipment_type"] == "cooler"
+        for ticket_id in first
+    )
     assert all(len(db.get_ticket(ticket_id)["messages"]) == 1 for ticket_id in first)
 
 

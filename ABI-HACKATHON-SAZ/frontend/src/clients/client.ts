@@ -7,6 +7,14 @@ export type TicketStatus =
   | 'encaminhado_fornecedor'
 
 export type TicketPriority = 'normal' | 'urgente'
+export type EquipmentType = 'cooler' | 'geladeira'
+export type ConversationStage =
+  | 'aguardando_proximidade'
+  | 'aguardando_identificacao'
+  | 'aguardando_confirmacao_equipamento'
+  | 'diagnostico'
+  | 'aguardando_confirmacao'
+  | 'finalizado'
 
 export interface Message {
   id?: number
@@ -23,18 +31,49 @@ export interface Equipment {
   image_name: string | null
 }
 
+export type SupplierEvidenceType =
+  | 'descricao_inicial'
+  | 'relato_pdv'
+  | 'foto_etiqueta'
+
+export interface SupplierEvidence {
+  tipo: SupplierEvidenceType
+  descricao: string
+}
+
+export interface SupplierEquipment {
+  tipo: EquipmentType
+  modelo: string
+  numero_serie: string
+  confianca: number
+  foto_etiqueta: string | null
+}
+
+export interface SupplierSummary {
+  ticket_id: string
+  nome_pdv: string
+  assunto: string
+  equipamento: SupplierEquipment | null
+  evidencias: SupplierEvidence[]
+  acoes_tentadas: string[]
+  prioridade: TicketPriority
+  motivo: string
+}
+
 export interface Ticket {
   id: string
   nome_pdv: string
   assunto: string
   descricao_base: string
+  equipment_type: EquipmentType
   status: TicketStatus
-  stage: string
+  stage: ConversationStage
   confirmation_deadline: string | null
   priority: TicketPriority
   outcome_reason: string
   equipment: Equipment | null
   messages: Message[]
+  supplier_summary: SupplierSummary | null
 }
 
 export interface KickoffRequest {
@@ -63,11 +102,21 @@ async function request(input: RequestInfo | URL, init: RequestInit | undefined, 
   }
 }
 
-export async function createTicket(nomePdv: string, assunto: string, descricaoBase: string): Promise<{ id: string }> {
+export async function createTicket(
+  nomePdv: string,
+  assunto: string,
+  descricaoBase: string,
+  equipmentType: EquipmentType = 'cooler',
+): Promise<{ id: string }> {
   const response = await request(`${API_BASE_URL}/tickets`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ nome_pdv: nomePdv, assunto, descricao_base: descricaoBase }),
+    body: JSON.stringify({
+      nome_pdv: nomePdv,
+      assunto,
+      descricao_base: descricaoBase,
+      equipment_type: equipmentType,
+    }),
   }, 'Não foi possível criar o ticket')
 
   return readResponse(response, 'Não foi possível criar o ticket')

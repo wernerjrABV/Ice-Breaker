@@ -33,6 +33,7 @@ const DEMO_TICKET = {
   nomePdv: 'Bar do João',
   assunto: 'Congela bebidas',
   descricaoBase: 'Bebidas congelando',
+  equipmentType: 'cooler' as const,
 }
 
 const STATUS_LABELS: Record<TicketStatus, string> = {
@@ -41,6 +42,9 @@ const STATUS_LABELS: Record<TicketStatus, string> = {
   resolvido_remotamente: 'Resolvido remotamente',
   encaminhado_fornecedor: 'Encaminhado ao fornecedor',
 }
+
+const MAX_EXPIRY_ATTEMPTS = 3
+const EXPIRY_RETRY_DELAYS_MS = [1_000, 2_000] as const
 
 function controlledError(error: unknown): string {
   if (
@@ -97,6 +101,7 @@ function Home() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refreshTicketId, setRefreshTicketId] = useState<string | null>(null)
   const [text, setText] = useState('')
   const [model, setModel] = useState('')
   const [serial, setSerialValue] = useState('')
@@ -109,6 +114,14 @@ function Home() {
     promise: Promise<Ticket>
   } | null>(null)
 
+  const applyTicket = useCallback((current: Ticket) => {
+    setTicket(current)
+    if (current.equipment) {
+      setModel(current.equipment.modelo)
+      setSerialValue(current.equipment.numero_serie)
+    }
+  }, [])
+
   const requestStartup = useCallback((): Promise<Ticket> => {
     if (startupPromiseRef.current) return startupPromiseRef.current
 
@@ -119,6 +132,7 @@ function Home() {
           DEMO_TICKET.nomePdv,
           DEMO_TICKET.assunto,
           DEMO_TICKET.descricaoBase,
+          DEMO_TICKET.equipmentType,
         )
         ticketId = created.id
         createdTicketIdRef.current = ticketId
@@ -136,11 +150,7 @@ function Home() {
       try {
         const current = await requestStartup()
         if (active) {
-          setTicket(current)
-          if (current.equipment) {
-            setModel(current.equipment.modelo)
-            setSerialValue(current.equipment.numero_serie)
-          }
+          applyTicket(current)
         }
       } catch (caught) {
         if (active) setError(controlledError(caught))
@@ -151,7 +161,7 @@ function Home() {
 
     void startTicket()
     return () => { active = false }
-  }, [requestStartup])
+  }, [applyTicket, requestStartup])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView?.({ behavior: 'smooth' })
@@ -175,6 +185,8 @@ function Home() {
 
     let active = true
     let expiryRequested = false
+    let expiryAttempts = 0
+    let retryTimer: number | undefined
 
     function requestExpiry(): Promise<Ticket> {
       const existing = expiryPromiseRef.current
@@ -186,28 +198,36 @@ function Home() {
     }
 
     async function expireDeadline() {
-      if (expiryRequested) return
+      if (!active || expiryRequested || expiryAttempts >= MAX_EXPIRY_ATTEMPTS) return
       expiryRequested = true
+      expiryAttempts += 1
       setBusy(true)
       setError(null)
       const request = requestExpiry()
+      let shouldRetry = false
       try {
         const current = await request
         if (active) {
-          setTicket(current)
-          if (current.equipment) {
-            setModel(current.equipment.modelo)
-            setSerialValue(current.equipment.numero_serie)
-          }
+          applyTicket(current)
+          shouldRetry = current.status === 'aguardando_confirmacao'
+            && current.confirmation_deadline === deadline
         }
       } catch (caught) {
+        if (active) setError(controlledError(caught))
+      } finally {
         if (expiryPromiseRef.current?.promise === request) {
           expiryPromiseRef.current = null
         }
         expiryRequested = false
-        if (active) setError(controlledError(caught))
-      } finally {
-        if (active) setBusy(false)
+        if (active) {
+          setBusy(false)
+          if (shouldRetry && expiryAttempts < MAX_EXPIRY_ATTEMPTS) {
+            const delay = EXPIRY_RETRY_DELAYS_MS[expiryAttempts - 1]
+              ?? EXPIRY_RETRY_DELAYS_MS.at(-1)
+              ?? 1_000
+            retryTimer = window.setTimeout(() => { void expireDeadline() }, delay)
+          }
+        }
       }
     }
 
@@ -227,21 +247,39 @@ function Home() {
       active = false
       window.clearInterval(clockTimer)
       window.clearTimeout(expiryTimer)
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
     }
-  }, [ticketDeadline, ticketId, ticketStatus])
+  }, [applyTicket, ticketDeadline, ticketId, ticketStatus])
 
-  async function runAction(action: () => Promise<unknown>) {
+  async function runAction(action: () => Promise<Ticket>) {
     if (!ticket || busy) return
+    const ticketId = ticket.id
+    setBusy(true)
+    setError(null)
+    setRefreshTicketId(null)
+    try {
+      const updated = await action()
+      applyTicket(updated)
+      try {
+        applyTicket(await getTicket(ticketId))
+      } catch (caught) {
+        setRefreshTicketId(ticketId)
+        setError(controlledError(caught))
+      }
+    } catch (caught) {
+      setError(controlledError(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRefreshRetry() {
+    if (!refreshTicketId || busy) return
     setBusy(true)
     setError(null)
     try {
-      await action()
-      const current = await getTicket(ticket.id)
-      setTicket(current)
-      if (current.equipment) {
-        setModel(current.equipment.modelo)
-        setSerialValue(current.equipment.numero_serie)
-      }
+      applyTicket(await getTicket(refreshTicketId))
+      setRefreshTicketId(null)
     } catch (caught) {
       setError(controlledError(caught))
     } finally {
@@ -255,11 +293,7 @@ function Home() {
     setError(null)
     try {
       const current = await requestStartup()
-      setTicket(current)
-      if (current.equipment) {
-        setModel(current.equipment.modelo)
-        setSerialValue(current.equipment.numero_serie)
-      }
+      applyTicket(current)
     } catch (caught) {
       setError(controlledError(caught))
     } finally {
@@ -276,8 +310,9 @@ function Home() {
     const content = text.trim()
     if (!content) return
     void runAction(async () => {
-      await sendMessage(ticket?.id ?? '', content)
+      const updated = await sendMessage(ticket?.id ?? '', content)
       setText('')
+      return updated
     })
   }
 
@@ -302,7 +337,11 @@ function Home() {
     || ticket?.status === 'encaminhado_fornecedor'
   const needsManualSerial = ticket?.stage === 'aguardando_identificacao'
     && ticket.equipment !== null
-    && (ticket.equipment.confianca < 0.8 || !ticket.equipment.numero_serie.trim())
+    && (
+      ticket.equipment.confianca < 0.8
+      || !ticket.equipment.numero_serie.trim()
+      || ticket.outcome_reason === 'correcao_identificacao_necessaria'
+    )
   const urgentRouting = ticket ? isUrgentRouting(ticket) : false
 
   return (
@@ -364,6 +403,16 @@ function Home() {
               Tentar novamente
             </button>
           )}
+          {error && ticket && refreshTicketId && (
+            <button
+              type="button"
+              className="startup-retry"
+              disabled={busy}
+              onClick={() => { void handleRefreshRetry() }}
+            >
+              Tentar atualizar
+            </button>
+          )}
 
           {ticket?.status === 'resolvido_remotamente' && (
             <section className="result-card result-card-success" aria-label="Resultado do atendimento">
@@ -391,18 +440,55 @@ function Home() {
               <div>
                 <span className="result-eyebrow">Próximo passo</span>
                 <h2>Encaminhado ao fornecedor</h2>
-                <p className="supplier-summary-title">Resumo para o fornecedor</p>
-                <dl className="supplier-summary">
-                  <div><dt>PDV</dt><dd>{ticket.nome_pdv}</dd></div>
-                  <div><dt>Chamado</dt><dd>{ticket.assunto}</dd></div>
-                  {ticket.equipment && (
-                    <div>
-                      <dt>Equipamento</dt>
-                      <dd>{ticket.equipment.modelo} · {ticket.equipment.numero_serie}</dd>
-                    </div>
-                  )}
-                </dl>
-                <p>Histórico, evidências e verificações realizadas seguem com o chamado.</p>
+                {ticket.supplier_summary && (
+                  <>
+                    <p className="supplier-summary-title">Resumo para o fornecedor</p>
+                    <dl className="supplier-summary">
+                      <div><dt>PDV</dt><dd>{ticket.supplier_summary.nome_pdv}</dd></div>
+                      <div><dt>Chamado</dt><dd>{ticket.supplier_summary.assunto}</dd></div>
+                      {ticket.supplier_summary.equipamento && (
+                        <div>
+                          <dt>Equipamento</dt>
+                          <dd>
+                            {ticket.supplier_summary.equipamento.tipo} ·{' '}
+                            {ticket.supplier_summary.equipamento.modelo} ·{' '}
+                            {ticket.supplier_summary.equipamento.numero_serie}
+                            {ticket.supplier_summary.equipamento.foto_etiqueta
+                              ? ` · ${ticket.supplier_summary.equipamento.foto_etiqueta}`
+                              : ''}
+                          </dd>
+                        </div>
+                      )}
+                      <div>
+                        <dt>Prioridade</dt>
+                        <dd className="supplier-priority">
+                          Prioridade {ticket.supplier_summary.prioridade}
+                        </dd>
+                      </div>
+                      <div><dt>Motivo</dt><dd>{ticket.supplier_summary.motivo}</dd></div>
+                    </dl>
+                    <section className="supplier-details" aria-label="Evidências para o fornecedor">
+                      <h3>Evidências</h3>
+                      {ticket.supplier_summary.evidencias.length > 0 ? (
+                        <ul>
+                          {ticket.supplier_summary.evidencias.map((item, index) => (
+                            <li key={`${item.tipo}-${index}`}>{item.descricao}</li>
+                          ))}
+                        </ul>
+                      ) : <p>Nenhuma evidência adicional registrada.</p>}
+                    </section>
+                    <section className="supplier-details" aria-label="Ações tentadas para o fornecedor">
+                      <h3>Ações tentadas</h3>
+                      {ticket.supplier_summary.acoes_tentadas.length > 0 ? (
+                        <ul>
+                          {ticket.supplier_summary.acoes_tentadas.map((action, index) => (
+                            <li key={`${index}-${action}`}>{action}</li>
+                          ))}
+                        </ul>
+                      ) : <p>Nenhuma verificação remota foi realizada.</p>}
+                    </section>
+                  </>
+                )}
               </div>
             </section>
           )}
@@ -425,6 +511,39 @@ function Home() {
                 </button>
                 <button type="button" disabled={busy} onClick={() => handleQuickReply('Não')}>Não</button>
               </div>
+            )}
+
+            {ticket.stage === 'aguardando_confirmacao_equipamento' && ticket.equipment && (
+              <>
+                <section
+                  className="equipment-confirmation"
+                  aria-label="Confirmação do equipamento"
+                >
+                  <span>Modelo</span>
+                  <strong>{ticket.equipment.modelo || 'Não informado'}</strong>
+                  <span>Número de série</span>
+                  <strong>{ticket.equipment.numero_serie}</strong>
+                  {ticket.equipment.image_name && (
+                    <small>Foto da etiqueta: {ticket.equipment.image_name}</small>
+                  )}
+                </section>
+                <div className="quick-replies" aria-label="Confirmar dados do equipamento">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => handleQuickReply('Sim, dados corretos')}
+                  >
+                    Sim, dados corretos
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => handleQuickReply('Não, corrigir')}
+                  >
+                    Não, corrigir
+                  </button>
+                </div>
+              </>
             )}
 
             {ticket.stage === 'aguardando_identificacao' && (

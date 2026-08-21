@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 from crewai import LLM
@@ -6,7 +7,8 @@ from workflow.contracts import EquipmentLabel
 
 
 def _default_llm() -> LLM:
-    return LLM(model="gpt-4o-mini")
+    model = os.getenv("OPENAI_MODEL", "").strip() or "openai/gpt-4o-mini"
+    return LLM(model=model)
 
 
 def read_label(image_data_url: str, llm: Any = None) -> EquipmentLabel:

@@ -398,6 +398,32 @@
   overflow-wrap: anywhere;
 }
 
+.supplier-priority {
+  text-transform: capitalize;
+}
+
+.supplier-details {
+  margin-top: 10px;
+}
+
+.supplier-details h3 {
+  margin: 0 0 5px;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.supplier-details ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.supplier-details p {
+  font-size: 12px;
+}
+
 .composer-area {
   z-index: 1;
   flex: 0 0 auto;
@@ -444,6 +470,31 @@
 
 .identification-tools {
   margin-bottom: 9px;
+}
+
+.equipment-confirmation {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid #c9ded4;
+  border-radius: 0.75rem;
+  background: #f4fbf7;
+}
+
+.equipment-confirmation span {
+  color: #587168;
+  font-size: 0.78rem;
+}
+
+.equipment-confirmation strong {
+  overflow-wrap: anywhere;
+  color: #173e31;
+}
+
+.equipment-confirmation small {
+  grid-column: 1 / -1;
+  color: #587168;
 }
 
 .photo-button {

@@ -1,6 +1,31 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+ReplyKey = Literal[
+    "confirmar_proximidade",
+    "solicitar_identificacao",
+    "confirmar_equipamento",
+    "confirmar_resolucao",
+    "descrever_sintoma",
+    "equipamento_fora_do_escopo",
+]
+RiskKey = Literal[
+    "cheiro_queimado",
+    "faisca",
+    "cabo_danificado",
+    "vazamento",
+    "equipamento_fora_do_escopo",
+]
+SymptomKey = Literal[
+    "congela_bebidas",
+    "porta_nao_fecha",
+    "nao_gela",
+    "nao_liga",
+    "ruido_anormal",
+    "desconhecido",
+]
 
 
 class EquipmentLabel(BaseModel):
@@ -26,6 +51,8 @@ class ConversationRequest(BaseModel):
 
 
 class ConversationReply(BaseModel):
-    message: str
-    risks: list[str] = Field(default_factory=list)
-    symptom: str = "desconhecido"
+    model_config = ConfigDict(extra="forbid")
+
+    reply_key: ReplyKey
+    risks: list[RiskKey] = Field(default_factory=list)
+    symptom: SymptomKey = "desconhecido"

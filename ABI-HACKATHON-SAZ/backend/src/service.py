@@ -7,9 +7,17 @@ from typing import Any
 
 from src import client, db
 from src.models import (
+    AgentConversationReply,
+    AgentReplyKey,
     ConversationStage,
+    EvidenceType,
+    EquipmentType,
     Outcome,
+    Priority,
     RiskFlag,
+    SupplierEquipment,
+    SupplierEvidence,
+    SupplierSummary,
     TicketStatus,
 )
 from src.triage_rules import decide_triage, normalize_symptom
@@ -20,17 +28,65 @@ _CONFIRMATION_WINDOW = timedelta(minutes=30)
 _FINAL_STATUSES = frozenset(
     {TicketStatus.REMOTE_RESOLVED.value, TicketStatus.SUPPLIER.value}
 )
-_UNSUPPORTED_EQUIPMENT = frozenset({"chopper", "postmix"})
+_UNSUPPORTED_EQUIPMENT_PHRASES = (
+    "ar condicionado",
+    "arcondicionado",
+    "chopper",
+    "postmix",
+    "post mix",
+)
+_SUPPORTED_EQUIPMENT_PHRASES: dict[EquipmentType, tuple[str, ...]] = {
+    EquipmentType.COOLER: ("cooler", "coolers"),
+    EquipmentType.GELADEIRA: ("geladeira", "geladeiras"),
+}
 
 _RISK_PHRASES: dict[RiskFlag, tuple[str, ...]] = {
-    RiskFlag.BURNING_SMELL: ("cheiro de queimado", "cheiro queimado"),
-    RiskFlag.SPARK: ("faisca",),
-    RiskFlag.DAMAGED_CABLE: ("cabo danificado",),
-    RiskFlag.LEAK: ("vazamento",),
+    RiskFlag.BURNING_SMELL: (
+        "cheiro de queimado",
+        "cheiro a queimado",
+        "cheiro queimado",
+    ),
+    RiskFlag.SPARK: ("faisca", "faiscas"),
+    RiskFlag.DAMAGED_CABLE: ("cabo danificado", "cabo esta danificado"),
+    RiskFlag.LEAK: ("vazamento", "vazando", "esta vazando"),
+}
+
+_AGENT_REPLY_TEMPLATES: dict[
+    ConversationStage, tuple[AgentReplyKey, str]
+] = {
+    ConversationStage.PROXIMITY: (
+        AgentReplyKey.CONFIRM_PROXIMITY,
+        "Para continuar, confirme: você está próximo ao equipamento?",
+    ),
+    ConversationStage.IDENTIFICATION: (
+        AgentReplyKey.REQUEST_IDENTIFICATION,
+        "Envie uma foto da etiqueta ou informe o modelo e o número de série.",
+    ),
+    ConversationStage.EQUIPMENT_CONFIRMATION: (
+        AgentReplyKey.CONFIRM_EQUIPMENT,
+        "Confira o modelo e o número de série exibidos. Os dados estão corretos?",
+    ),
+    ConversationStage.DIAGNOSIS: (
+        AgentReplyKey.DESCRIBE_SYMPTOM,
+        "Descreva o que está acontecendo com o equipamento.",
+    ),
+    ConversationStage.CONFIRMATION: (
+        AgentReplyKey.CONFIRM_RESOLUTION,
+        "Quando terminar as verificações, confirme se o equipamento voltou a "
+        "funcionar corretamente.",
+    ),
 }
 
 
 class InvalidTransitionError(ValueError):
+    pass
+
+
+class AgentResponseError(ValueError):
+    pass
+
+
+class EquipmentScopeError(ValueError):
     pass
 
 
@@ -51,15 +107,56 @@ def _extract_risks(text: str) -> set[RiskFlag]:
     }
 
 
-def _has_unsupported_equipment(text: str) -> bool:
-    tokens = set(_normalize(text).split())
-    return bool(tokens.intersection(_UNSUPPORTED_EQUIPMENT))
+def _contains_phrase(normalized_text: str, phrase: str) -> bool:
+    return f" {phrase} " in f" {normalized_text} "
+
+
+def _validate_equipment_scope(
+    equipment_type: EquipmentType | str,
+    *texts: str,
+) -> EquipmentType:
+    try:
+        expected_type = EquipmentType(equipment_type)
+    except ValueError as exc:
+        raise EquipmentScopeError(
+            "O tipo de equipamento deve ser cooler ou geladeira."
+        ) from exc
+
+    normalized = _normalize(" ".join(texts))
+    if any(
+        _contains_phrase(normalized, phrase)
+        for phrase in _UNSUPPORTED_EQUIPMENT_PHRASES
+    ):
+        raise EquipmentScopeError(
+            "O equipamento informado está fora do escopo; use apenas cooler ou geladeira."
+        )
+
+    mentioned_types = {
+        candidate
+        for candidate, phrases in _SUPPORTED_EQUIPMENT_PHRASES.items()
+        if any(_contains_phrase(normalized, phrase) for phrase in phrases)
+    }
+    if any(candidate is not expected_type for candidate in mentioned_types):
+        raise EquipmentScopeError(
+            "O equipamento mencionado contradiz o tipo informado no chamado."
+        )
+    return expected_type
 
 
 def _is_negative(text: str) -> bool:
     normalized = _normalize(text)
     return normalized == "nao" or any(
-        phrase in normalized for phrase in ("ainda nao", "nao resolveu", "continua")
+        phrase in normalized
+        for phrase in (
+            "ainda nao",
+            "nao resolveu",
+            "continua",
+            "nao os dados",
+            "dados errados",
+            "nao estao corretos",
+            "nao estou proximo",
+            "nao estou perto",
+        )
     )
 
 
@@ -73,6 +170,8 @@ def _is_affirmative(text: str) -> bool:
         "resolvido",
         "funcionou",
         "voltou ao normal",
+        "sim os dados estao corretos",
+        "dados corretos",
     }
 
 
@@ -127,6 +226,20 @@ def _append_assistant(
     return _ticket_or_raise(ticket_id)
 
 
+def _await_equipment_confirmation(ticket_id: str) -> dict[str, Any]:
+    db.set_ticket_state(
+        ticket_id,
+        TicketStatus.TRIAGE,
+        ConversationStage.EQUIPMENT_CONFIRMATION,
+        reason="identificacao_aguardando_confirmacao",
+    )
+    return _append_assistant(
+        ticket_id,
+        "Confira o modelo e o número de série exibidos. Os dados estão corretos?",
+        kind="identification",
+    )
+
+
 def _route_supplier(
     ticket_id: str,
     *,
@@ -157,19 +270,7 @@ def _route_critical_risk(ticket_id: str, source_text: str) -> dict[str, Any]:
     )
 
 
-def _route_unsupported_equipment(ticket_id: str) -> dict[str, Any]:
-    return _route_supplier(
-        ticket_id,
-        priority="normal",
-        reason="equipamento_fora_do_escopo",
-        message=(
-            "Este atendimento atende apenas coolers e geladeiras. "
-            "Para chopper ou postmix, acione o suporte responsável."
-        ),
-    )
-
-
-def _agent_reply(ticket: dict[str, Any]) -> dict[str, Any]:
+def _agent_reply(ticket: dict[str, Any]) -> AgentConversationReply:
     payload = {
         "nome_pdv": ticket["nome_pdv"],
         "assunto": ticket["assunto"],
@@ -179,17 +280,48 @@ def _agent_reply(ticket: dict[str, Any]) -> dict[str, Any]:
             for message in ticket["messages"]
         ],
     }
-    return client.request_conversation_reply(payload)
+    raw_reply = client.request_conversation_reply(payload)
+    try:
+        return AgentConversationReply.model_validate(raw_reply)
+    except ValueError as exc:
+        raise AgentResponseError(
+            "O agente retornou uma resposta estruturada inválida."
+        ) from exc
 
 
-def create_case(nome_pdv: str, assunto: str, descricao_base: str) -> dict[str, Any]:
+def _render_agent_reply(
+    stage: ConversationStage,
+    reply_key: AgentReplyKey,
+) -> str:
+    expected = _AGENT_REPLY_TEMPLATES.get(stage)
+    if expected is None or reply_key is not expected[0]:
+        raise AgentResponseError(
+            "O agente retornou uma intenção incompatível com a etapa atual."
+        )
+    return expected[1]
+
+
+def create_case(
+    nome_pdv: str,
+    assunto: str,
+    descricao_base: str,
+    equipment_type: EquipmentType = EquipmentType.COOLER,
+) -> dict[str, Any]:
     ticket_id = str(uuid.uuid4())
-    db.create_ticket(ticket_id, nome_pdv, assunto, descricao_base)
     source_text = f"{assunto} {descricao_base}"
-    if _extract_risks(source_text):
+    risks = _extract_risks(source_text)
+    validated_type = EquipmentType(equipment_type)
+    if not risks:
+        validated_type = _validate_equipment_scope(validated_type, source_text)
+    db.create_ticket(
+        ticket_id,
+        nome_pdv,
+        assunto,
+        descricao_base,
+        validated_type,
+    )
+    if risks:
         return _route_critical_risk(ticket_id, source_text)
-    if _has_unsupported_equipment(source_text):
-        return _route_unsupported_equipment(ticket_id)
     opening = (
         f"Olá! Recebi um chamado do {nome_pdv} sobre {assunto}. "
         "Quero entender melhor o que está acontecendo e verificar se já consigo ajudar "
@@ -216,13 +348,12 @@ def handle_text(
                 "o chamado foi encaminhado ao fornecedor."
             ),
         )
-    db.append_message(ticket_id, "user", text)
-
     risks = _extract_risks(text)
     if risks:
+        db.append_message(ticket_id, "user", text)
         return _route_critical_risk(ticket_id, text)
-    if _has_unsupported_equipment(text):
-        return _route_unsupported_equipment(ticket_id)
+    _validate_equipment_scope(str(ticket["equipment_type"]), text)
+    db.append_message(ticket_id, "user", text)
 
     if stage is ConversationStage.PROXIMITY:
         if _is_negative(text):
@@ -264,10 +395,26 @@ def handle_text(
                 kind="resolution",
             )
 
+    elif stage is ConversationStage.EQUIPMENT_CONFIRMATION:
+        if _is_negative(text):
+            db.set_ticket_state(
+                ticket_id,
+                TicketStatus.TRIAGE,
+                ConversationStage.IDENTIFICATION,
+                reason="correcao_identificacao_necessaria",
+            )
+            return _append_assistant(
+                ticket_id,
+                "Certo. Corrija o modelo e o número de série antes de continuar.",
+                kind="identification",
+            )
+        if _is_affirmative(text):
+            return _diagnose(ticket_id)
+
     reply = _agent_reply(_ticket_or_raise(ticket_id))
-    interpreted_risks = _extract_risks(" ".join(reply.get("risks", [])))
+    interpreted_risks = set(reply.risks)
     if interpreted_risks:
-        decision = decide_triage(normalize_symptom(reply.get("symptom", "")), interpreted_risks)
+        decision = decide_triage(reply.symptom, interpreted_risks)
         return _route_supplier(
             ticket_id,
             priority=decision.priority.value,
@@ -277,7 +424,11 @@ def handle_text(
                 "o chamado foi encaminhado com urgência ao fornecedor."
             ),
         )
-    return _append_assistant(ticket_id, reply["message"], kind="conversation")
+    return _append_assistant(
+        ticket_id,
+        _render_agent_reply(stage, reply.reply_key),
+        kind="conversation",
+    )
 
 
 def _diagnose(ticket_id: str) -> dict[str, Any]:
@@ -313,6 +464,7 @@ def _diagnose(ticket_id: str) -> dict[str, Any]:
         priority=decision.priority.value,
         reason=decision.reason,
     )
+    db.record_checklist_actions(ticket_id, decision.checklist)
     checklist = " ".join(
         f"{index}. {item}" for index, item in enumerate(decision.checklist, start=1)
     )
@@ -328,10 +480,11 @@ def handle_label(
     label: dict[str, Any],
     image_name: str | None,
 ) -> dict[str, Any]:
-    require_identification(ticket_id)
+    ticket = require_identification(ticket_id)
     modelo = str(label.get("modelo", ""))
     numero_serie = str(label.get("numero_serie", ""))
     confianca = float(label.get("confianca", 0.0))
+    _validate_equipment_scope(str(ticket["equipment_type"]), modelo)
     db.set_equipment(ticket_id, modelo, numero_serie, confianca, image_name)
 
     if confianca < _OCR_CONFIDENCE_THRESHOLD or not numero_serie.strip():
@@ -347,27 +500,22 @@ def handle_label(
             kind="identification",
         )
 
-    db.append_message(
-        ticket_id,
-        "assistant",
-        f"Identifiquei o modelo {modelo} e o serial {numero_serie}.",
-        "identification",
-    )
-    return _diagnose(ticket_id)
+    return _await_equipment_confirmation(ticket_id)
 
 
 def handle_serial(ticket_id: str, modelo: str, numero_serie: str) -> dict[str, Any]:
-    require_identification(ticket_id)
+    ticket = require_identification(ticket_id)
     if not numero_serie.strip():
         raise ValueError("O número de série é obrigatório.")
-    db.set_equipment(ticket_id, modelo, numero_serie, 1.0, None)
-    db.append_message(
-        ticket_id,
-        "assistant",
-        f"Registrei o modelo {modelo} e o serial {numero_serie}.",
-        "identification",
+    _validate_equipment_scope(str(ticket["equipment_type"]), modelo)
+    current_equipment = ticket["equipment"]
+    image_name = (
+        current_equipment["image_name"]
+        if current_equipment is not None
+        else None
     )
-    return _diagnose(ticket_id)
+    db.set_equipment(ticket_id, modelo, numero_serie, 1.0, image_name)
+    return _await_equipment_confirmation(ticket_id)
 
 
 def expire_confirmations(
@@ -391,23 +539,67 @@ def expire_confirmations(
     return expired_ids
 
 
-def supplier_summary(ticket_id: str) -> dict[str, object]:
+def supplier_summary(ticket_id: str) -> SupplierSummary:
     ticket = _ticket_or_raise(ticket_id)
     equipment = ticket["equipment"]
-    if equipment is None:
-        raise ValueError("O equipamento do chamado não foi identificado.")
-    return {
-        "ticket_id": ticket_id,
-        "nome_pdv": ticket["nome_pdv"],
-        "assunto": ticket["assunto"],
-        "modelo": equipment["modelo"],
-        "numero_serie": equipment["numero_serie"],
-        "prioridade": ticket["priority"],
-        "motivo": ticket["outcome_reason"],
-        "acoes_tentadas": [
-            message["content"]
-            for message in ticket["messages"]
-            if message["role"] == "assistant"
-            and message["kind"] == "checklist"
-        ],
+    description = str(ticket["descricao_base"]).strip() or str(ticket["assunto"])
+    evidence = [
+        SupplierEvidence(
+            tipo=EvidenceType.INITIAL_DESCRIPTION,
+            descricao=description,
+        )
+    ]
+    control_replies = {
+        "sim",
+        "nao",
+        "sim os dados estao corretos",
+        "dados corretos",
+        "nao corrigir",
     }
+    evidence.extend(
+        SupplierEvidence(
+            tipo=EvidenceType.PDV_REPORT,
+            descricao=str(message["content"]),
+        )
+        for message in ticket["messages"]
+        if message["role"] == "user"
+        and _normalize(str(message["content"])) not in control_replies
+    )
+    supplier_equipment = None
+    if equipment is not None:
+        image_name = equipment["image_name"]
+        supplier_equipment = SupplierEquipment(
+            tipo=EquipmentType(str(ticket["equipment_type"])),
+            modelo=str(equipment["modelo"]),
+            numero_serie=str(equipment["numero_serie"]),
+            confianca=float(equipment["confianca"]),
+            foto_etiqueta=str(image_name) if image_name is not None else None,
+        )
+        if image_name:
+            evidence.append(
+                SupplierEvidence(
+                    tipo=EvidenceType.LABEL_PHOTO,
+                    descricao=str(image_name),
+                )
+            )
+
+    actions = [str(action) for action in ticket.get("checklist_actions", [])]
+    if not actions:
+        # Preserve useful evidence for tickets created before the structured
+        # checklist-actions migration without changing their stored history.
+        actions = [
+            str(message["content"])
+            for message in ticket["messages"]
+            if message["role"] == "assistant" and message["kind"] == "checklist"
+        ]
+
+    return SupplierSummary(
+        ticket_id=ticket_id,
+        nome_pdv=str(ticket["nome_pdv"]),
+        assunto=str(ticket["assunto"]),
+        equipamento=supplier_equipment,
+        evidencias=evidence,
+        acoes_tentadas=actions,
+        prioridade=Priority(str(ticket["priority"])),
+        motivo=str(ticket["outcome_reason"]),
+    )

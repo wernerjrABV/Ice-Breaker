@@ -9,6 +9,7 @@ const normalBackendTicket: Ticket = {
   nome_pdv: 'Bar do João',
   assunto: 'Não gela',
   descricao_base: 'Baixa refrigeração',
+  equipment_type: 'cooler',
   status: 'em_triagem',
   stage: 'aguardando_proximidade',
   confirmation_deadline: null,
@@ -16,6 +17,7 @@ const normalBackendTicket: Ticket = {
   outcome_reason: '',
   equipment: null,
   messages: [],
+  supplier_summary: null,
 }
 
 test('creates a ticket with the base call information', async () => {
@@ -23,12 +25,17 @@ test('creates a ticket with the base call information', async () => {
     new Response(JSON.stringify({ id: 'T-1' }), { status: 201 }),
   )
 
-  await expect(createTicket('Bar do João', 'Não gela', 'Baixa refrigeração')).resolves.toEqual({ id: 'T-1' })
+  await expect(createTicket('Bar do João', 'Não gela', 'Baixa refrigeração', 'cooler')).resolves.toEqual({ id: 'T-1' })
   expect(fetchMock).toHaveBeenCalledWith(
     expect.stringContaining('/tickets'),
     expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ nome_pdv: 'Bar do João', assunto: 'Não gela', descricao_base: 'Baixa refrigeração' }),
+      body: JSON.stringify({
+        nome_pdv: 'Bar do João',
+        assunto: 'Não gela',
+        descricao_base: 'Baixa refrigeração',
+        equipment_type: 'cooler',
+      }),
     }),
   )
 })
@@ -139,8 +146,22 @@ test('models the required backend priority and outcome reason fields', () => {
     stage: 'finalizado',
     priority: 'urgente',
     outcome_reason: 'risco_critico',
+    supplier_summary: {
+      ticket_id: 'T-URGENT',
+      nome_pdv: 'Bar do João',
+      assunto: 'Cheiro de queimado',
+      equipamento: null,
+      evidencias: [
+        { tipo: 'descricao_inicial', descricao: 'Odor forte no cooler' },
+      ],
+      acoes_tentadas: [],
+      prioridade: 'urgente',
+      motivo: 'Risco crítico identificado.',
+    },
   }
 
   expect(backendTicket.priority).toBe('urgente')
   expect(backendTicket.outcome_reason).toBe('risco_critico')
+  expect(backendTicket.supplier_summary?.equipamento).toBeNull()
+  expect(backendTicket.supplier_summary?.evidencias[0]?.tipo).toBe('descricao_inicial')
 })
