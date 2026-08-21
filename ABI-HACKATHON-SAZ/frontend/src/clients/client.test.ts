@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import { createTicket, expireConfirmations, getTicket, sendMessage, sendPhoto, sendSerial } from './client'
+import type { Message } from './client'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -60,6 +61,10 @@ test('sends an equipment photo to a ticket', async () => {
 
   await sendPhoto('T-1', photo)
   const request = fetchMock.mock.calls[0]?.[1]
+  expect(fetchMock).toHaveBeenCalledWith(
+    'http://127.0.0.1:8001/tickets/T-1/equipment/photo',
+    expect.any(Object),
+  )
   expect(request?.method).toBe('POST')
   expect(request?.body).toBeInstanceOf(FormData)
   expect((request?.body as FormData).get('photo')).toBe(photo)
@@ -79,5 +84,34 @@ test('expires confirmation deadlines', async () => {
 test('includes the HTTP status in Portuguese errors', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 503 }))
 
-  await expect(getTicket('T-1')).rejects.toThrow('503')
+  await expect(getTicket('T-1')).rejects.toThrow('Não foi possível obter o ticket: 503')
+})
+
+test('wraps network failures with a Portuguese contextual error', async () => {
+  vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+
+  await expect(sendMessage('T-1', 'Ainda não gela')).rejects.toThrow(
+    'Não foi possível enviar a mensagem: erro de rede',
+  )
+})
+
+test('models backend messages without ids and with every emitted kind', () => {
+  const kinds: Message['kind'][] = [
+    'text',
+    'opening',
+    'conversation',
+    'identification',
+    'routing',
+    'resolution',
+    'checklist',
+  ]
+  const backendMessages: Message[] = kinds.map((kind) => ({
+    role: 'assistant',
+    content: 'Mensagem do backend',
+    kind,
+    created_at: '2026-08-21T00:00:00Z',
+  }))
+
+  expect(backendMessages).toHaveLength(kinds.length)
+  expect(backendMessages.every((message) => !('id' in message))).toBe(true)
 })
