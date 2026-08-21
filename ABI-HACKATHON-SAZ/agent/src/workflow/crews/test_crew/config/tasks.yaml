@@ -1,0 +1,7 @@
+write_text:
+  description: >
+    Escreva um texto curto sobre o seguinte assunto: {subject}.
+    Garanta que o texto seja simples e conciso, capturando a essência do assunto em questão.
+  expected_output: >
+    Um texto curto descrevendo {subject}.
+  agent: text_writer
