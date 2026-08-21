@@ -117,8 +117,12 @@ def require_identification(ticket_id: str) -> dict[str, Any]:
     return ticket
 
 
-def _append_assistant(ticket_id: str, message: str) -> dict[str, Any]:
-    db.append_message(ticket_id, "assistant", message)
+def _append_assistant(
+    ticket_id: str,
+    message: str,
+    kind: str = "text",
+) -> dict[str, Any]:
+    db.append_message(ticket_id, "assistant", message, kind)
     return _ticket_or_raise(ticket_id)
 
 
@@ -136,7 +140,7 @@ def _route_supplier(
         priority=priority,
         reason=reason,
     )
-    return _append_assistant(ticket_id, message)
+    return _append_assistant(ticket_id, message, kind="routing")
 
 
 def _route_critical_risk(ticket_id: str, source_text: str) -> dict[str, Any]:
@@ -190,7 +194,7 @@ def create_case(nome_pdv: str, assunto: str, descricao_base: str) -> dict[str, A
         "Quero entender melhor o que está acontecendo e verificar se já consigo ajudar "
         "você agora. Você está próximo ao equipamento?"
     )
-    return _append_assistant(ticket_id, opening)
+    return _append_assistant(ticket_id, opening, kind="opening")
 
 
 def handle_text(
@@ -311,6 +315,7 @@ def _diagnose(ticket_id: str) -> dict[str, Any]:
     return _append_assistant(
         ticket_id,
         f"Siga estas verificações seguras: {checklist} O cooler voltou a funcionar corretamente?",
+        kind="checklist",
     )
 
 
@@ -358,19 +363,41 @@ def handle_serial(ticket_id: str, modelo: str, numero_serie: str) -> dict[str, A
     return _diagnose(ticket_id)
 
 
-def expire_confirmations(now: datetime | None = None) -> list[dict[str, Any]]:
+def expire_confirmations(now: datetime | None = None) -> list[str]:
     expired = db.list_expired_confirmations(now)
-    updated = []
+    expired_ids = []
     for ticket in expired:
-        updated.append(
-            _route_supplier(
-                str(ticket["id"]),
-                priority=str(ticket["priority"]),
-                reason="sem_confirmacao_pdv",
-                message=(
-                    "Como não houve confirmação do PDV em 30 minutos, "
-                    "o chamado foi encaminhado ao fornecedor."
-                ),
-            )
+        ticket_id = str(ticket["id"])
+        _route_supplier(
+            ticket_id,
+            priority=str(ticket["priority"]),
+            reason="sem_confirmacao_pdv",
+            message=(
+                "Como não houve confirmação do PDV em 30 minutos, "
+                "o chamado foi encaminhado ao fornecedor."
+            ),
         )
-    return updated
+        expired_ids.append(ticket_id)
+    return expired_ids
+
+
+def supplier_summary(ticket_id: str) -> dict[str, object]:
+    ticket = _ticket_or_raise(ticket_id)
+    equipment = ticket["equipment"]
+    if equipment is None:
+        raise ValueError("O equipamento do chamado não foi identificado.")
+    return {
+        "ticket_id": ticket_id,
+        "nome_pdv": ticket["nome_pdv"],
+        "assunto": ticket["assunto"],
+        "modelo": equipment["modelo"],
+        "numero_serie": equipment["numero_serie"],
+        "prioridade": ticket["priority"],
+        "motivo": ticket["outcome_reason"],
+        "acoes_tentadas": [
+            message["content"]
+            for message in ticket["messages"]
+            if message["role"] == "assistant"
+            and message["kind"] in {"checklist", "text"}
+        ],
+    }

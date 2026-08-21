@@ -243,6 +243,7 @@ def get_ticket(ticket_id: str) -> dict[str, object] | None:
 
 
 def list_expired_confirmations(now: datetime | None = None) -> list[dict[str, object]]:
+    """Return only confirmation-stage tickets whose UTC deadline has elapsed."""
     current = _as_utc(now) if now is not None else datetime.now(timezone.utc)
     with _connect() as conn:
         rows = conn.execute(

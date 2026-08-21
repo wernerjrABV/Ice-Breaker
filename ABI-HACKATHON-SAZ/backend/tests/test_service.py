@@ -291,6 +291,7 @@ def test_expired_confirmation_routes_supplier_with_timeout_reason():
 
     expired = service.expire_confirmations()
 
-    assert [item["id"] for item in expired] == [ticket["id"]]
-    assert expired[0]["status"] == TicketStatus.SUPPLIER.value
-    assert expired[0]["outcome_reason"] == "sem_confirmacao_pdv"
+    assert expired == [ticket["id"]]
+    updated = db.get_ticket(ticket["id"])
+    assert updated["status"] == TicketStatus.SUPPLIER.value
+    assert updated["outcome_reason"] == "sem_confirmacao_pdv"
