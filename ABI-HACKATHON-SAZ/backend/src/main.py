@@ -65,6 +65,8 @@ def post_message(ticket_id: str, request: MessageRequest) -> dict[str, Any]:
     _ticket_or_404(ticket_id)
     try:
         return service.handle_text(ticket_id, request.content)
+    except service.InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Agent API call failed: {exc}") from exc
 
@@ -74,6 +76,8 @@ def post_serial(ticket_id: str, request: SerialRequest) -> dict[str, Any]:
     _ticket_or_404(ticket_id)
     try:
         return service.handle_serial(ticket_id, request.modelo, request.numero_serie)
+    except service.InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -84,6 +88,10 @@ async def post_photo(
     photo: UploadFile = File(...),
 ) -> dict[str, Any]:
     _ticket_or_404(ticket_id)
+    try:
+        service.require_identification(ticket_id)
+    except service.InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     image_bytes = await photo.read()
     media_type = photo.content_type or "application/octet-stream"
     encoded = base64.b64encode(image_bytes).decode("ascii")

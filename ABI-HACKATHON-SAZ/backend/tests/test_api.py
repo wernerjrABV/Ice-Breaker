@@ -98,6 +98,36 @@ def test_photo_api_requires_user_facing_manual_serial_fallback(api, monkeypatch,
     assert "serial manualmente" in body["messages"][-1]["content"].lower()
 
 
+def test_photo_api_rejects_final_ticket_before_ocr(api, monkeypatch):
+    ticket = api.post(
+        "/tickets",
+        json={
+            "nome_pdv": "Bar",
+            "assunto": "Congela bebidas",
+            "descricao_base": "Bebidas congelando",
+        },
+    ).json()
+    db.set_ticket_state(
+        ticket["id"],
+        TicketStatus.REMOTE_RESOLVED,
+        ConversationStage.FINISHED,
+        reason="confirmacao_positiva_pdv",
+    )
+
+    def unexpected_ocr_call(image_data_url):
+        raise AssertionError("final tickets must be rejected before OCR")
+
+    monkeypatch.setattr(agent_client, "read_equipment_label", unexpected_ocr_call)
+
+    response = api.post(
+        f"/tickets/{ticket['id']}/equipment/photo",
+        files={"photo": ("late.jpg", b"late-image", "image/jpeg")},
+    )
+
+    assert response.status_code == 409
+    assert db.get_ticket(ticket["id"])["equipment"] is None
+
+
 class FakeResponse:
     def __init__(self, payload):
         self.payload = payload

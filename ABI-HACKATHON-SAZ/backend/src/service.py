@@ -1,3 +1,4 @@
+import re
 import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,10 @@ from src.triage_rules import decide_triage, normalize_symptom
 
 _OCR_CONFIDENCE_THRESHOLD = 0.80
 _CONFIRMATION_WINDOW = timedelta(minutes=30)
+_FINAL_STATUSES = frozenset(
+    {TicketStatus.REMOTE_RESOLVED.value, TicketStatus.SUPPLIER.value}
+)
+_UNSUPPORTED_EQUIPMENT = frozenset({"chopper", "postmix"})
 
 _RISK_PHRASES: dict[RiskFlag, tuple[str, ...]] = {
     RiskFlag.BURNING_SMELL: ("cheiro de queimado", "cheiro queimado"),
@@ -24,12 +29,16 @@ _RISK_PHRASES: dict[RiskFlag, tuple[str, ...]] = {
 }
 
 
+class InvalidTransitionError(ValueError):
+    pass
+
+
 def _normalize(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text.casefold())
     unaccented = "".join(
         character for character in decomposed if not unicodedata.combining(character)
     )
-    return " ".join(unaccented.replace("_", " ").split())
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", unaccented).split())
 
 
 def _extract_risks(text: str) -> set[RiskFlag]:
@@ -41,25 +50,70 @@ def _extract_risks(text: str) -> set[RiskFlag]:
     }
 
 
+def _has_unsupported_equipment(text: str) -> bool:
+    tokens = set(_normalize(text).split())
+    return bool(tokens.intersection(_UNSUPPORTED_EQUIPMENT))
+
+
 def _is_negative(text: str) -> bool:
     normalized = _normalize(text)
-    return any(
-        phrase in normalized
-        for phrase in ("nao", "não", "ainda nao", "nao resolveu", "continua")
+    return normalized == "nao" or any(
+        phrase in normalized for phrase in ("ainda nao", "nao resolveu", "continua")
     )
 
 
 def _is_affirmative(text: str) -> bool:
     if _is_negative(text):
         return False
-    tokens = set(_normalize(text).replace(",", " ").split())
-    return bool(tokens.intersection({"sim", "resolvido", "resolveu", "funcionou", "estou"}))
+    return _normalize(text) in {
+        "sim",
+        "sim resolveu",
+        "resolveu",
+        "resolvido",
+        "funcionou",
+        "voltou ao normal",
+    }
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _confirmation_expired(ticket: dict[str, Any], now: datetime | None) -> bool:
+    deadline_value = ticket["confirmation_deadline"]
+    if deadline_value is None:
+        return False
+    current = _as_utc(now) if now is not None else datetime.now(timezone.utc)
+    return _as_utc(datetime.fromisoformat(str(deadline_value))) <= current
 
 
 def _ticket_or_raise(ticket_id: str) -> dict[str, Any]:
     ticket = db.get_ticket(ticket_id)
     if ticket is None:
         raise KeyError(ticket_id)
+    return ticket
+
+
+def _ensure_active(ticket: dict[str, Any]) -> None:
+    if (
+        ticket["status"] in _FINAL_STATUSES
+        or ticket["stage"] == ConversationStage.FINISHED.value
+    ):
+        raise InvalidTransitionError("O atendimento já foi finalizado.")
+
+
+def require_identification(ticket_id: str) -> dict[str, Any]:
+    ticket = _ticket_or_raise(ticket_id)
+    _ensure_active(ticket)
+    if (
+        ticket["status"] != TicketStatus.TRIAGE.value
+        or ticket["stage"] != ConversationStage.IDENTIFICATION.value
+    ):
+        raise InvalidTransitionError(
+            "A identificação do equipamento não é aceita no estágio atual."
+        )
     return ticket
 
 
@@ -85,6 +139,31 @@ def _route_supplier(
     return _append_assistant(ticket_id, message)
 
 
+def _route_critical_risk(ticket_id: str, source_text: str) -> dict[str, Any]:
+    decision = decide_triage(normalize_symptom(source_text), _extract_risks(source_text))
+    return _route_supplier(
+        ticket_id,
+        priority=decision.priority.value,
+        reason=decision.reason,
+        message=(
+            "Identifiquei um sinal de risco. Não manipule nem abra o equipamento; "
+            "o chamado foi encaminhado com urgência ao fornecedor."
+        ),
+    )
+
+
+def _route_unsupported_equipment(ticket_id: str) -> dict[str, Any]:
+    return _route_supplier(
+        ticket_id,
+        priority="normal",
+        reason="equipamento_fora_do_escopo",
+        message=(
+            "Este atendimento atende apenas coolers e geladeiras. "
+            "Para chopper ou postmix, acione o suporte responsável."
+        ),
+    )
+
+
 def _agent_reply(ticket: dict[str, Any]) -> dict[str, Any]:
     payload = {
         "nome_pdv": ticket["nome_pdv"],
@@ -101,6 +180,11 @@ def _agent_reply(ticket: dict[str, Any]) -> dict[str, Any]:
 def create_case(nome_pdv: str, assunto: str, descricao_base: str) -> dict[str, Any]:
     ticket_id = str(uuid.uuid4())
     db.create_ticket(ticket_id, nome_pdv, assunto, descricao_base)
+    source_text = f"{assunto} {descricao_base}"
+    if _extract_risks(source_text):
+        return _route_critical_risk(ticket_id, source_text)
+    if _has_unsupported_equipment(source_text):
+        return _route_unsupported_equipment(ticket_id)
     opening = (
         f"Olá! Recebi um chamado do {nome_pdv} sobre {assunto}. "
         "Quero entender melhor o que está acontecendo e verificar se já consigo ajudar "
@@ -109,24 +193,32 @@ def create_case(nome_pdv: str, assunto: str, descricao_base: str) -> dict[str, A
     return _append_assistant(ticket_id, opening)
 
 
-def handle_text(ticket_id: str, text: str) -> dict[str, Any]:
+def handle_text(
+    ticket_id: str,
+    text: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     ticket = _ticket_or_raise(ticket_id)
+    _ensure_active(ticket)
+    stage = ConversationStage(ticket["stage"])
+    if stage is ConversationStage.CONFIRMATION and _confirmation_expired(ticket, now):
+        return _route_supplier(
+            ticket_id,
+            priority=str(ticket["priority"]),
+            reason="sem_confirmacao_pdv",
+            message=(
+                "Como não houve confirmação do PDV em 30 minutos, "
+                "o chamado foi encaminhado ao fornecedor."
+            ),
+        )
     db.append_message(ticket_id, "user", text)
 
     risks = _extract_risks(text)
     if risks:
-        decision = decide_triage(normalize_symptom(text), risks)
-        return _route_supplier(
-            ticket_id,
-            priority=decision.priority.value,
-            reason=decision.reason,
-            message=(
-                "Identifiquei um sinal de risco. Não manipule nem abra o equipamento; "
-                "o chamado foi encaminhado com urgência ao fornecedor."
-            ),
-        )
+        return _route_critical_risk(ticket_id, text)
+    if _has_unsupported_equipment(text):
+        return _route_unsupported_equipment(ticket_id)
 
-    stage = ConversationStage(ticket["stage"])
     if stage is ConversationStage.PROXIMITY:
         if _is_negative(text):
             return _append_assistant(
@@ -163,9 +255,6 @@ def handle_text(ticket_id: str, text: str) -> dict[str, Any]:
                 ticket_id,
                 "Ótimo! Registrei sua confirmação e encerrei o chamado como resolvido remotamente.",
             )
-
-    elif stage is ConversationStage.FINISHED:
-        return _append_assistant(ticket_id, "Este atendimento já foi finalizado.")
 
     reply = _agent_reply(_ticket_or_raise(ticket_id))
     interpreted_risks = _extract_risks(" ".join(reply.get("risks", [])))
@@ -230,7 +319,7 @@ def handle_label(
     label: dict[str, Any],
     image_name: str | None,
 ) -> dict[str, Any]:
-    _ticket_or_raise(ticket_id)
+    require_identification(ticket_id)
     modelo = str(label.get("modelo", ""))
     numero_serie = str(label.get("numero_serie", ""))
     confianca = float(label.get("confianca", 0.0))
@@ -257,7 +346,7 @@ def handle_label(
 
 
 def handle_serial(ticket_id: str, modelo: str, numero_serie: str) -> dict[str, Any]:
-    _ticket_or_raise(ticket_id)
+    require_identification(ticket_id)
     if not numero_serie.strip():
         raise ValueError("O número de série é obrigatório.")
     db.set_equipment(ticket_id, modelo, numero_serie, 1.0, None)
