@@ -1,5 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { Message, Ticket } from '../../clients/client'
 import Home from './Home'
@@ -7,6 +8,7 @@ import Home from './Home'
 const client = vi.hoisted(() => ({
   createKickoffRequest: vi.fn(),
   createTicket: vi.fn(),
+  expireConfirmations: vi.fn(),
   getTicket: vi.fn(),
   listKickoffRequests: vi.fn(),
   sendMessage: vi.fn(),
@@ -17,6 +19,7 @@ const client = vi.hoisted(() => ({
 vi.mock('../../clients/client', () => client)
 
 const createdAt = '2026-08-21T12:00:00Z'
+const confirmationDeadline = new Date(Date.now() + 30 * 60_000).toISOString()
 
 function message(
   role: Message['role'],
@@ -35,6 +38,8 @@ function ticket(overrides: Partial<Ticket> = {}): Ticket {
     status: 'em_triagem',
     stage: 'aguardando_proximidade',
     confirmation_deadline: null,
+    priority: 'normal',
+    outcome_reason: '',
     equipment: null,
     messages: [
       message(
@@ -63,7 +68,7 @@ const identificationTicket = ticket({
 const waitingTicket = ticket({
   status: 'aguardando_confirmacao',
   stage: 'aguardando_confirmacao',
-  confirmation_deadline: '2099-08-21T12:30:00Z',
+  confirmation_deadline: confirmationDeadline,
   equipment: {
     modelo: 'CX-400',
     numero_serie: 'BR-12345',
@@ -93,10 +98,14 @@ afterEach(() => {
 
 test('starts with the proactive message and asks for equipment identification', async () => {
   const user = userEvent.setup()
+  const actionResponse = ticket({
+    stage: 'aguardando_identificacao',
+    messages: [message('assistant', 'Resposta transitória da ação.', 'conversation')],
+  })
   client.getTicket
     .mockResolvedValueOnce(ticket())
     .mockResolvedValueOnce(identificationTicket)
-  client.sendMessage.mockResolvedValue(identificationTicket)
+  client.sendMessage.mockResolvedValue(actionResponse)
 
   render(<Home />)
 
@@ -113,6 +122,69 @@ test('starts with the proactive message and asks for equipment identification', 
     'Congela bebidas',
     'Bebidas congelando',
   )
+  expect(screen.queryByText('Resposta transitória da ação.')).not.toBeInTheDocument()
+  expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
+})
+
+test('creates only one startup ticket when StrictMode replays the effect', async () => {
+  client.getTicket.mockResolvedValue(ticket())
+
+  render(<StrictMode><Home /></StrictMode>)
+
+  await screen.findByText(/quero entender melhor/i)
+  expect(client.createTicket).toHaveBeenCalledTimes(1)
+  expect(client.getTicket.mock.calls).toEqual([['T-1']])
+})
+
+test('retries startup after a controlled create failure and recovers', async () => {
+  const user = userEvent.setup()
+  client.createTicket
+    .mockRejectedValueOnce(new Error('Não foi possível criar o ticket: erro de rede'))
+    .mockResolvedValueOnce({ id: 'T-1' })
+  client.getTicket.mockResolvedValue(ticket())
+
+  render(<Home />)
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Não foi possível criar o ticket: erro de rede',
+  )
+  await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
+
+  expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
+  expect(client.createTicket).toHaveBeenCalledTimes(2)
+  expect(client.getTicket.mock.calls).toEqual([['T-1']])
+})
+
+test('retries a startup refresh with the existing ticket id', async () => {
+  const user = userEvent.setup()
+  client.getTicket
+    .mockRejectedValueOnce(new Error('Não foi possível obter o ticket: erro de rede'))
+    .mockResolvedValueOnce(ticket())
+
+  render(<Home />)
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Não foi possível obter o ticket: erro de rede',
+  )
+  await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
+
+  expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
+  expect(client.createTicket).toHaveBeenCalledTimes(1)
+  expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
+})
+
+test('keeps the message history flexible and the composer pinned after it', async () => {
+  client.getTicket.mockResolvedValue(ticket())
+
+  render(<Home />)
+
+  const shell = await screen.findByLabelText('Atendimento CoolCare')
+  const chat = screen.getByRole('main')
+  const composer = screen.getByRole('contentinfo')
+  expect(shell).toHaveClass('phone-shell-flex')
+  expect(chat).toHaveClass('chat-area-flexible')
+  expect(composer).toHaveClass('composer-pinned')
+  expect(chat.nextElementSibling).toBe(composer)
 })
 
 test('shows remote saving only after positive confirmation', async () => {
@@ -120,6 +192,7 @@ test('shows remote saving only after positive confirmation', async () => {
   const resolvedTicket = ticket({
     status: 'resolvido_remotamente',
     stage: 'finalizado',
+    outcome_reason: 'confirmacao_positiva_pdv',
     equipment: waitingTicket.equipment,
     messages: [
       ...waitingTicket.messages,
@@ -134,7 +207,7 @@ test('shows remote saving only after positive confirmation', async () => {
   client.getTicket
     .mockResolvedValueOnce(waitingTicket)
     .mockResolvedValueOnce(resolvedTicket)
-  client.sendMessage.mockResolvedValue(resolvedTicket)
+  client.sendMessage.mockResolvedValue(waitingTicket)
 
   render(<Home />)
 
@@ -147,6 +220,7 @@ test('shows remote saving only after positive confirmation', async () => {
     await screen.findByRole('heading', { name: /resolvido remotamente/i }),
   ).toBeInTheDocument()
   expect(screen.getByText(/R\$ 200/)).toBeInTheDocument()
+  expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
 })
 
 test('shows supplier routing summary without remote saving', async () => {
@@ -154,6 +228,7 @@ test('shows supplier routing summary without remote saving', async () => {
   const supplierTicket = ticket({
     status: 'encaminhado_fornecedor',
     stage: 'finalizado',
+    outcome_reason: 'problema_persistiu_apos_checklist',
     equipment: waitingTicket.equipment,
     messages: [
       ...waitingTicket.messages,
@@ -168,7 +243,7 @@ test('shows supplier routing summary without remote saving', async () => {
   client.getTicket
     .mockResolvedValueOnce(waitingTicket)
     .mockResolvedValueOnce(supplierTicket)
-  client.sendMessage.mockResolvedValue(supplierTicket)
+  client.sendMessage.mockResolvedValue(waitingTicket)
 
   render(<Home />)
   await screen.findByText(/aguardando confirmação/i)
@@ -179,6 +254,45 @@ test('shows supplier routing summary without remote saving', async () => {
   ).toBeInTheDocument()
   expect(screen.getByText(/CX-400.*BR-12345/i)).toBeInTheDocument()
   expect(screen.queryByText(/R\$ 200/)).not.toBeInTheDocument()
+  expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
+})
+
+test.each([
+  {
+    priority: 'urgente' as const,
+    routingMessage: 'O chamado foi encaminhado ao fornecedor.',
+    expectedUrgent: true,
+  },
+  {
+    priority: 'normal' as const,
+    routingMessage: 'Não manipule o equipamento enquanto aguarda o fornecedor.',
+    expectedUrgent: false,
+  },
+])('derives urgent presentation strictly from $priority priority', async ({
+  priority,
+  routingMessage,
+  expectedUrgent,
+}) => {
+  const supplierTicket = ticket({
+    status: 'encaminhado_fornecedor',
+    stage: 'finalizado',
+    priority,
+    outcome_reason: priority === 'urgente' ? 'risco_critico' : 'atendimento_tecnico',
+    messages: [message('assistant', routingMessage, 'routing')],
+  })
+  client.getTicket.mockResolvedValue(supplierTicket)
+
+  render(<Home />)
+  await screen.findByRole('heading', { name: /encaminhado ao fornecedor/i })
+
+  const urgentWarning = screen.queryByText(/aviso urgente/i)
+  if (expectedUrgent) {
+    expect(urgentWarning).toBeInTheDocument()
+    expect(screen.getByLabelText('Resultado do atendimento')).toHaveClass('result-card-urgent')
+  } else {
+    expect(urgentWarning).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Resultado do atendimento')).not.toHaveClass('result-card-urgent')
+  }
 })
 
 test('updates the visual confirmation countdown while waiting', async () => {
@@ -196,6 +310,56 @@ test('updates the visual confirmation countdown while waiting', async () => {
   act(() => vi.advanceTimersByTime(60_000))
 
   expect(screen.getByText(/restam 29 min/i)).toBeInTheDocument()
+})
+
+test('expires the deadline once, disables confirmation, and refreshes the supplier outcome', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime('2026-08-21T12:00:00Z')
+  let completeExpiry: ((ticketIds: string[]) => void) | undefined
+  const beforeExpiry = {
+    ...waitingTicket,
+    confirmation_deadline: '2026-08-21T12:00:30Z',
+  }
+  const afterExpiry = ticket({
+    status: 'encaminhado_fornecedor',
+    stage: 'finalizado',
+    outcome_reason: 'sem_confirmacao_pdv',
+    equipment: waitingTicket.equipment,
+    messages: [
+      ...waitingTicket.messages,
+      message(
+        'assistant',
+        'Como não houve confirmação do PDV em 30 minutos, o chamado foi encaminhado ao fornecedor.',
+        'routing',
+      ),
+    ],
+  })
+  client.getTicket
+    .mockResolvedValueOnce(beforeExpiry)
+    .mockResolvedValueOnce(afterExpiry)
+  client.expireConfirmations.mockImplementation(
+    () => new Promise<string[]>((resolve) => { completeExpiry = resolve }),
+  )
+
+  render(<Home />)
+  await act(async () => undefined)
+  expect(screen.getByRole('button', { name: /sim, resolveu/i })).toBeEnabled()
+
+  act(() => vi.advanceTimersByTime(30_000))
+
+  expect(client.expireConfirmations).toHaveBeenCalledTimes(1)
+  expect(screen.getByRole('button', { name: /sim, resolveu/i })).toBeDisabled()
+  expect(screen.getByRole('button', { name: /^não$/i })).toBeDisabled()
+  expect(screen.queryByRole('heading', { name: /encaminhado ao fornecedor/i })).not.toBeInTheDocument()
+
+  await act(async () => {
+    completeExpiry?.(['T-1'])
+  })
+
+  expect(screen.getByRole('heading', { name: /encaminhado ao fornecedor/i })).toBeInTheDocument()
+  expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
+  act(() => vi.advanceTimersByTime(60_000))
+  expect(client.expireConfirmations).toHaveBeenCalledTimes(1)
 })
 
 test('offers manual serial after a photo has OCR confidence below 0.80', async () => {
@@ -221,8 +385,8 @@ test('offers manual serial after a photo has OCR confidence below 0.80', async (
     .mockResolvedValueOnce(identificationTicket)
     .mockResolvedValueOnce(uncertainTicket)
     .mockResolvedValueOnce(waitingTicket)
-  client.sendPhoto.mockResolvedValue(uncertainTicket)
-  client.sendSerial.mockResolvedValue(waitingTicket)
+  client.sendPhoto.mockResolvedValue(identificationTicket)
+  client.sendSerial.mockResolvedValue(uncertainTicket)
 
   render(<Home />)
 
@@ -244,11 +408,17 @@ test('offers manual serial after a photo has OCR confidence below 0.80', async (
   await waitFor(() => {
     expect(client.sendSerial).toHaveBeenCalledWith('T-1', 'CX-400', 'BR-12345')
   })
+  expect(await screen.findByText(/aguardando confirmação/i)).toBeInTheDocument()
+  expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1'], ['T-1']])
 })
 
 test('disables conversation controls while a request is in progress', async () => {
   const user = userEvent.setup()
   let completeRequest: ((value: Ticket) => void) | undefined
+  const actionResponse = ticket({
+    stage: 'aguardando_identificacao',
+    messages: [message('assistant', 'Resposta transitória da ação.', 'conversation')],
+  })
   client.getTicket
     .mockResolvedValueOnce(identificationTicket)
     .mockResolvedValueOnce(identificationTicket)
@@ -266,9 +436,11 @@ test('disables conversation controls while a request is in progress', async () =
   expect(screen.getByLabelText(/foto da etiqueta/i)).toBeDisabled()
 
   await act(async () => {
-    completeRequest?.(identificationTicket)
+    completeRequest?.(actionResponse)
   })
   await waitFor(() => expect(textBox).toBeEnabled())
+  expect(screen.queryByText('Resposta transitória da ação.')).not.toBeInTheDocument()
+  expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
 })
 
 test('shows controlled Portuguese errors and restores the controls', async () => {

@@ -6,6 +6,8 @@ export type TicketStatus =
   | 'resolvido_remotamente'
   | 'encaminhado_fornecedor'
 
+export type TicketPriority = 'normal' | 'urgente'
+
 export interface Message {
   id?: number
   role: 'user' | 'assistant'
@@ -29,9 +31,10 @@ export interface Ticket {
   status: TicketStatus
   stage: string
   confirmation_deadline: string | null
+  priority: TicketPriority
+  outcome_reason: string
   equipment: Equipment | null
   messages: Message[]
-  supplier_summary?: Record<string, unknown>
 }
 
 export interface KickoffRequest {

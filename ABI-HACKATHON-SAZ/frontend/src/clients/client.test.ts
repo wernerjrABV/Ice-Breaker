@@ -1,8 +1,22 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import { createTicket, expireConfirmations, getTicket, sendMessage, sendPhoto, sendSerial } from './client'
-import type { Message } from './client'
+import type { Message, Ticket } from './client'
 
 afterEach(() => vi.restoreAllMocks())
+
+const normalBackendTicket: Ticket = {
+  id: 'T-1',
+  nome_pdv: 'Bar do João',
+  assunto: 'Não gela',
+  descricao_base: 'Baixa refrigeração',
+  status: 'em_triagem',
+  stage: 'aguardando_proximidade',
+  confirmation_deadline: null,
+  priority: 'normal',
+  outcome_reason: '',
+  equipment: null,
+  messages: [],
+}
 
 test('creates a ticket with the base call information', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -20,18 +34,17 @@ test('creates a ticket with the base call information', async () => {
 })
 
 test('gets a ticket by id', async () => {
-  const ticket = { id: 'T-1', messages: [] }
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify(ticket), { status: 200 }),
+    new Response(JSON.stringify(normalBackendTicket), { status: 200 }),
   )
 
-  await expect(getTicket('T-1')).resolves.toEqual(ticket)
+  await expect(getTicket('T-1')).resolves.toEqual(normalBackendTicket)
   expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tickets/T-1'))
 })
 
 test('sends a message to a ticket', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({ id: 'T-1' }), { status: 200 }),
+    new Response(JSON.stringify(normalBackendTicket), { status: 200 }),
   )
 
   await sendMessage('T-1', 'Ainda não gela')
@@ -43,7 +56,7 @@ test('sends a message to a ticket', async () => {
 
 test('sends equipment serial to a ticket', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({ id: 'T-1' }), { status: 200 }),
+    new Response(JSON.stringify(normalBackendTicket), { status: 200 }),
   )
 
   await sendSerial('T-1', 'CX-400', 'BR-1')
@@ -55,7 +68,7 @@ test('sends equipment serial to a ticket', async () => {
 
 test('sends an equipment photo to a ticket', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({ id: 'T-1' }), { status: 200 }),
+    new Response(JSON.stringify(normalBackendTicket), { status: 200 }),
   )
   const photo = new File(['image'], 'label.jpg', { type: 'image/jpeg' })
 
@@ -114,4 +127,20 @@ test('models backend messages without ids and with every emitted kind', () => {
 
   expect(backendMessages).toHaveLength(kinds.length)
   expect(backendMessages.every((message) => !('id' in message))).toBe(true)
+})
+
+test('models the required backend priority and outcome reason fields', () => {
+  const backendTicket: Ticket = {
+    ...normalBackendTicket,
+    id: 'T-URGENT',
+    assunto: 'Cheiro de queimado',
+    descricao_base: 'Odor forte no cooler',
+    status: 'encaminhado_fornecedor',
+    stage: 'finalizado',
+    priority: 'urgente',
+    outcome_reason: 'risco_critico',
+  }
+
+  expect(backendTicket.priority).toBe('urgente')
+  expect(backendTicket.outcome_reason).toBe('risco_critico')
 })

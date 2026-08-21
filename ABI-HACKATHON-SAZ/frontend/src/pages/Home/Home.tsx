@@ -8,6 +8,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -17,6 +18,7 @@ import {
 import Header from '../../components/Header/Header'
 import {
   createTicket,
+  expireConfirmations,
   getTicket,
   sendMessage,
   sendPhoto,
@@ -75,11 +77,8 @@ function formatDeadline(deadline: string, now: number): string {
 }
 
 function isUrgentRouting(ticket: Ticket): boolean {
-  if (ticket.status !== 'encaminhado_fornecedor') return false
-  return ticket.messages.some(
-    ({ role, content }) => role === 'assistant'
-      && /urgên|sinal de risco|não manipule/i.test(content),
-  )
+  return ticket.status === 'encaminhado_fornecedor'
+    && ticket.priority === 'urgente'
 }
 
 function MessageBubble({ item }: { item: Message }) {
@@ -103,18 +102,39 @@ function Home() {
   const [serial, setSerialValue] = useState('')
   const [now, setNow] = useState(() => Date.now())
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const createdTicketIdRef = useRef<string | null>(null)
+  const startupPromiseRef = useRef<Promise<Ticket> | null>(null)
+  const expiryPromiseRef = useRef<{
+    deadline: string
+    promise: Promise<Ticket>
+  } | null>(null)
+
+  const requestStartup = useCallback((): Promise<Ticket> => {
+    if (startupPromiseRef.current) return startupPromiseRef.current
+
+    const request = (async () => {
+      let ticketId = createdTicketIdRef.current
+      if (!ticketId) {
+        const created = await createTicket(
+          DEMO_TICKET.nomePdv,
+          DEMO_TICKET.assunto,
+          DEMO_TICKET.descricaoBase,
+        )
+        ticketId = created.id
+        createdTicketIdRef.current = ticketId
+      }
+      return getTicket(ticketId)
+    })()
+    startupPromiseRef.current = request
+    return request
+  }, [])
 
   useEffect(() => {
     let active = true
 
     async function startTicket() {
       try {
-        const created = await createTicket(
-          DEMO_TICKET.nomePdv,
-          DEMO_TICKET.assunto,
-          DEMO_TICKET.descricaoBase,
-        )
-        const current = await getTicket(created.id)
+        const current = await requestStartup()
         if (active) {
           setTicket(current)
           if (current.equipment) {
@@ -131,17 +151,84 @@ function Home() {
 
     void startTicket()
     return () => { active = false }
-  }, [])
+  }, [requestStartup])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView?.({ behavior: 'smooth' })
   }, [ticket?.messages.length])
 
+  const ticketStatus = ticket?.status
+  const ticketDeadline = ticket?.confirmation_deadline
+  const ticketId = ticket?.id
+
   useEffect(() => {
-    if (ticket?.status !== 'aguardando_confirmacao') return
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
-    return () => window.clearInterval(timer)
-  }, [ticket?.status])
+    if (
+      ticketStatus !== 'aguardando_confirmacao'
+      || !ticketDeadline
+      || !ticketId
+    ) return
+
+    const deadline = ticketDeadline
+    const expiringTicketId: string = ticketId
+    const deadlineTime = new Date(deadline).getTime()
+    if (Number.isNaN(deadlineTime)) return
+
+    let active = true
+    let expiryRequested = false
+
+    function requestExpiry(): Promise<Ticket> {
+      const existing = expiryPromiseRef.current
+      if (existing?.deadline === deadline) return existing.promise
+
+      const promise = expireConfirmations().then(() => getTicket(expiringTicketId))
+      expiryPromiseRef.current = { deadline, promise }
+      return promise
+    }
+
+    async function expireDeadline() {
+      if (expiryRequested) return
+      expiryRequested = true
+      setBusy(true)
+      setError(null)
+      const request = requestExpiry()
+      try {
+        const current = await request
+        if (active) {
+          setTicket(current)
+          if (current.equipment) {
+            setModel(current.equipment.modelo)
+            setSerialValue(current.equipment.numero_serie)
+          }
+        }
+      } catch (caught) {
+        if (expiryPromiseRef.current?.promise === request) {
+          expiryPromiseRef.current = null
+        }
+        expiryRequested = false
+        if (active) setError(controlledError(caught))
+      } finally {
+        if (active) setBusy(false)
+      }
+    }
+
+    function tick() {
+      const currentTime = Date.now()
+      setNow(currentTime)
+      if (currentTime >= deadlineTime) void expireDeadline()
+    }
+
+    tick()
+    const clockTimer = window.setInterval(tick, 30_000)
+    const expiryTimer = window.setTimeout(
+      tick,
+      Math.max(0, deadlineTime - Date.now()),
+    )
+    return () => {
+      active = false
+      window.clearInterval(clockTimer)
+      window.clearTimeout(expiryTimer)
+    }
+  }, [ticketDeadline, ticketId, ticketStatus])
 
   async function runAction(action: () => Promise<unknown>) {
     if (!ticket || busy) return
@@ -159,6 +246,24 @@ function Home() {
       setError(controlledError(caught))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function handleStartupRetry() {
+    startupPromiseRef.current = null
+    setLoading(true)
+    setError(null)
+    try {
+      const current = await requestStartup()
+      setTicket(current)
+      if (current.equipment) {
+        setModel(current.equipment.modelo)
+        setSerialValue(current.equipment.numero_serie)
+      }
+    } catch (caught) {
+      setError(controlledError(caught))
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -202,7 +307,7 @@ function Home() {
 
   return (
     <div className="home">
-      <section className="phone-shell" aria-label="Atendimento CoolCare">
+      <section className="phone-shell phone-shell-flex" aria-label="Atendimento CoolCare">
         <Header />
 
         <div className="ticket-context">
@@ -232,7 +337,7 @@ function Home() {
           </div>
         )}
 
-        <main className="chat-area" aria-live="polite">
+        <main className="chat-area chat-area-flexible" aria-live="polite">
           {loading && (
             <div className="loading-state">
               <span className="loading-dot" />
@@ -250,6 +355,15 @@ function Home() {
           </ol>
 
           {error && <p className="chat-error" role="alert">{error}</p>}
+          {error && !ticket && !loading && (
+            <button
+              type="button"
+              className="startup-retry"
+              onClick={() => { void handleStartupRetry() }}
+            >
+              Tentar novamente
+            </button>
+          )}
 
           {ticket?.status === 'resolvido_remotamente' && (
             <section className="result-card result-card-success" aria-label="Resultado do atendimento">
@@ -296,7 +410,7 @@ function Home() {
         </main>
 
         {!loading && ticket && !finalTicket && (
-          <footer className="composer-area">
+          <footer className="composer-area composer-pinned">
             {ticket.stage === 'aguardando_proximidade' && (
               <div className="quick-replies" aria-label="Respostas rápidas">
                 <button type="button" disabled={busy} onClick={() => handleQuickReply('Sim')}>Sim</button>
