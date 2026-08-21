@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -55,9 +57,16 @@ def test_serial_and_expiration_routes(api):
     assert identified.status_code == 200
     assert identified.json()["status"] == TicketStatus.WAITING_CONFIRMATION.value
 
+    db.set_ticket_state(
+        ticket["id"],
+        TicketStatus.WAITING_CONFIRMATION,
+        ConversationStage.CONFIRMATION,
+        datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+
     expired = api.post("/maintenance/expire-confirmations")
     assert expired.status_code == 200
-    assert expired.json() == []
+    assert expired.json() == [ticket["id"]]
 
 
 @pytest.mark.parametrize(

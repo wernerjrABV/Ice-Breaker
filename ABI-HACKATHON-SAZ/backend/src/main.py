@@ -104,7 +104,7 @@ async def post_photo(
 
 
 @app.post("/maintenance/expire-confirmations")
-def expire_confirmations() -> list[dict[str, Any]]:
+def expire_confirmations() -> list[str]:
     return service.expire_confirmations()
 
 

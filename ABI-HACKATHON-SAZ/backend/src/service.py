@@ -228,6 +228,7 @@ def handle_text(
             return _append_assistant(
                 ticket_id,
                 "Tudo bem. O atendimento pode ser retomado quando o PDV estiver junto ao cooler.",
+                kind="conversation",
             )
         if _is_affirmative(text):
             db.set_ticket_state(
@@ -238,6 +239,7 @@ def handle_text(
             return _append_assistant(
                 ticket_id,
                 "Envie uma foto da etiqueta do cooler ou informe o modelo e o número de série.",
+                kind="identification",
             )
 
     elif stage is ConversationStage.CONFIRMATION:
@@ -258,6 +260,7 @@ def handle_text(
             return _append_assistant(
                 ticket_id,
                 "Ótimo! Registrei sua confirmação e encerrei o chamado como resolvido remotamente.",
+                kind="resolution",
             )
 
     reply = _agent_reply(_ticket_or_raise(ticket_id))
@@ -273,7 +276,7 @@ def handle_text(
                 "o chamado foi encaminhado com urgência ao fornecedor."
             ),
         )
-    return _append_assistant(ticket_id, reply["message"])
+    return _append_assistant(ticket_id, reply["message"], kind="conversation")
 
 
 def _diagnose(ticket_id: str) -> dict[str, Any]:
@@ -340,12 +343,14 @@ def handle_label(
         return _append_assistant(
             ticket_id,
             "Não consegui confirmar a etiqueta com segurança. Informe o serial manualmente.",
+            kind="identification",
         )
 
     db.append_message(
         ticket_id,
         "assistant",
         f"Identifiquei o modelo {modelo} e o serial {numero_serie}.",
+        "identification",
     )
     return _diagnose(ticket_id)
 
@@ -359,6 +364,7 @@ def handle_serial(ticket_id: str, modelo: str, numero_serie: str) -> dict[str, A
         ticket_id,
         "assistant",
         f"Registrei o modelo {modelo} e o serial {numero_serie}.",
+        "identification",
     )
     return _diagnose(ticket_id)
 
@@ -398,6 +404,6 @@ def supplier_summary(ticket_id: str) -> dict[str, object]:
             message["content"]
             for message in ticket["messages"]
             if message["role"] == "assistant"
-            and message["kind"] in {"checklist", "text"}
+            and message["kind"] == "checklist"
         ],
     }
