@@ -1,6 +1,8 @@
 import base64
+import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -8,7 +10,7 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from src import client, db, service
+from src import client, db, demo_data, service
 from src.client import call_agent_kickoff
 
 
@@ -104,8 +106,18 @@ async def post_photo(
 
 
 @app.post("/maintenance/expire-confirmations")
-def expire_confirmations() -> list[str]:
-    return service.expire_confirmations()
+def expire_confirmations(now: datetime | None = None) -> list[str]:
+    if now is not None and os.getenv("DEMO_MODE", "").casefold() != "true":
+        raise HTTPException(
+            status_code=403,
+            detail="O parâmetro now só é aceito quando DEMO_MODE=true.",
+        )
+    return service.expire_confirmations(now)
+
+
+@app.post("/demo/reset")
+def reset_demo() -> list[str]:
+    return demo_data.reset_demo_cases()
 
 
 @app.post("/kickoff")

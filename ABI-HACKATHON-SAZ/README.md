@@ -1,74 +1,140 @@
-# Hackathon SAZ - Grand Slam
+# CoolCare — Hackathon SAZ Grand Slam
 
-*Templates para aplicações de front-end, back-end e agentes baseados em CrewAI.*
+O CoolCare é um MVP de triagem segura para chamados de coolers e geladeiras. O front-end React conversa com o back-end FastAPI, que persiste o atendimento em SQLite e consulta a API do agente CrewAI quando necessário.
 
-# Primeira vez por aqui?
-
-Este repositório contém três projetos que funcionam em conjunto e podem ser usados como projeto-base/template para
-desenvolver sua solução durante o Hackathon SAZ - Grand Slam:
-
-- **`agent/`** — um fluxo de trabalho baseado em CrewAI exposto por meio de um serviço FastAPI (API do Agente).
-- **`backend/`** — um serviço FastAPI que recebe solicitações do front-end, gerencia solicitações em um banco SQLite e as encaminha para a API do Agente (API de Back-end).
-- **`frontend/`** — uma aplicação React de página única que se comunica com a API de Back-end.
-
-O fluxo típico de solicitações é: **Front-end → API de Back-end → API do Agente**.
-
-![Hackathon SAZ - Grand Slam](hackathon.png)
+```text
+Front-end :5173 → Back-end :8001 → Agente :8000
+```
 
 ## Pré-requisitos
 
-Para executar o projeto em sua máquina, instale primeiro os seguintes pré-requisitos:
+- Python compatível com cada `pyproject.toml` (o agente aceita 3.10 até 3.13; o back-end requer 3.13 ou superior)
+- [uv](https://docs.astral.sh/uv/)
+- Node.js e npm
 
-- [Python](https://www.python.org/) (para os projetos Python `agent` e `backend`)
-- [uv](https://docs.astral.sh/uv/) (para os projetos Python `agent` e `backend`)
-- [Node.js](https://nodejs.org/) e npm (para o projeto `frontend`)
+Os comandos abaixo são para Windows PowerShell e partem da pasta `ABI-HACKATHON-SAZ`.
 
-## Executando os três projetos em conjunto
+## Configuração inicial
 
-Você pode pedir facilmente a um agente de IA que execute os três projetos em conjunto, fornecendo as instruções abaixo.
+Crie os três arquivos locais de ambiente:
 
-Se precisar executar cada projeto separadamente, siga manualmente estas instruções a partir do diretório raiz:
+```powershell
+Copy-Item agent/.env.example agent/.env
+Copy-Item backend/.env.example backend/.env
+Copy-Item frontend/.env.example frontend/.env
+```
 
-## Executando a API do Agente
+Edite `agent/.env` e substitua o valor de exemplo de `OPENAI_API_KEY`. Confirme também o `OPENAI_MODEL`. Os exemplos do back-end e do front-end já apontam para as portas locais padrão. Nunca versione os arquivos `.env` nem cole a chave em comandos, logs ou capturas de tela.
 
-```bash
-cd agent
+## Iniciar os serviços
+
+Abra três terminais PowerShell.
+
+Terminal 1 — agente em `http://127.0.0.1:8000`:
+
+```powershell
+Set-Location agent
 uv sync
-.venv\Scripts\activate
 uv run api
 ```
 
-Copie `agent/.env.example` para `agent/.env` e preencha as variáveis `OPENAI_*` antes de iniciar o serviço.
+Terminal 2 — back-end em `http://127.0.0.1:8001`:
 
-A API do Agente é iniciada em `http://127.0.0.1:8000`.
-
-## Executando a API de Back-end
-
-```bash
-cd backend
+```powershell
+Set-Location backend
 uv sync
-.venv\Scripts\activate
+$env:DEMO_MODE = "true"
 uv run api
 ```
 
-Copie `backend/.env.example` para `backend/.env` e verifique se `AGENT_API_URL` aponta para a API do Agente (o padrão é `http://127.0.0.1:8000/kickoff`).
+`DEMO_MODE=true` permite somente que o roteiro passe um relógio acelerado à rota de expiração. Para execução normal, omita essa variável ou use `$env:DEMO_MODE = "false"`; o timeout continua sendo calculado pelo relógio real e permanece em 30 minutos.
 
-A API de Back-end é iniciada em `http://127.0.0.1:8001`. Verifique se a API do Agente já está em execução, pois a API de Back-end encaminha as solicitações para ela.
+Terminal 3 — front-end em `http://localhost:5173`:
 
-## Executando o Front-end
-
-```bash
-cd frontend
+```powershell
+Set-Location frontend
 npm install
 npm run dev
 ```
 
-Copie `frontend/.env.example` para `frontend/.env` e verifique se `VITE_API_BASE_URL` aponta para a API de Back-end (o padrão é `http://127.0.0.1:8001`).
+Inicie os serviços na ordem agente, back-end e front-end. A documentação interativa do back-end fica em `http://127.0.0.1:8001/docs`.
 
-O front-end é iniciado em `http://localhost:5173`. Verifique se a API de Back-end já está em execução, pois o front-end depende dela.
+## Roteiro de demonstração repetível
 
-## Ordem de inicialização sugerida
+Em um quarto terminal, defina a URL e restaure os quatro chamados. A restauração recria somente os IDs `DEMO-*`; chamados reais ou criados manualmente são preservados.
 
-1. API do Agente (`agent/`)
-2. API de Back-end (`backend/`)
-3. Front-end (`frontend/`)
+```powershell
+$api = "http://127.0.0.1:8001"
+$demoIds = Invoke-RestMethod -Method Post -Uri "$api/demo/reset"
+$demoIds
+```
+
+O resultado é sempre:
+
+```text
+DEMO-REMOTE
+DEMO-DOOR
+DEMO-SUPPLIER
+DEMO-URGENT
+```
+
+### 1. Resolução remota — Congela bebidas
+
+Abra o chamado e avance pela proximidade, identificação e confirmação positiva:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri "$api/tickets/DEMO-REMOTE"
+Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-REMOTE/messages" -ContentType "application/json" -Body (@{ content = "sim" } | ConvertTo-Json)
+Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-REMOTE/equipment/serial" -ContentType "application/json" -Body (@{ modelo = "CX-400"; numero_serie = "BR-DEMO-001" } | ConvertTo-Json)
+$remote = Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-REMOTE/messages" -ContentType "application/json" -Body (@{ content = "sim, resolveu" } | ConvertTo-Json)
+$remote.status
+```
+
+O status final é `resolvido_remotamente`. Esse é o único desfecho que o front-end apresenta como visita evitada de **R$ 200**.
+
+### 2. Encaminhamento urgente — Cheiro de queimado
+
+Abra `DEMO-URGENT` e informe o risco. A regra determinística interrompe a triagem sem aguardar foto, checklist ou confirmação:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri "$api/tickets/DEMO-URGENT"
+$urgent = Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-URGENT/messages" -ContentType "application/json" -Body (@{ content = "Há cheiro de queimado no cooler" } | ConvertTo-Json)
+$urgent | Select-Object status, priority, outcome_reason
+```
+
+O resultado é `encaminhado_fornecedor`, prioridade `urgente`, sem saving.
+
+### 3. Timeout acelerado — Porta não fecha
+
+Coloque `DEMO-DOOR` em confirmação pendente e passe um instante posterior ao deadline. O parâmetro `now` só é aceito porque o back-end desta demonstração foi iniciado com `DEMO_MODE=true`.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-DOOR/messages" -ContentType "application/json" -Body (@{ content = "sim" } | ConvertTo-Json)
+$waiting = Invoke-RestMethod -Method Post -Uri "$api/tickets/DEMO-DOOR/equipment/serial" -ContentType "application/json" -Body (@{ modelo = "CX-400"; numero_serie = "BR-DEMO-002" } | ConvertTo-Json)
+$demoNow = [DateTimeOffset]::Parse($waiting.confirmation_deadline).AddSeconds(1).ToString("o")
+$encodedNow = [Uri]::EscapeDataString($demoNow)
+$expiredIds = Invoke-RestMethod -Method Post -Uri "$api/maintenance/expire-confirmations?now=$encodedNow"
+$expiredIds
+Invoke-RestMethod -Method Get -Uri "$api/tickets/DEMO-DOOR" | Select-Object status, outcome_reason
+```
+
+O caso termina como `encaminhado_fornecedor`, com motivo `sem_confirmacao_pdv`, sem esperar 30 minutos e sem contabilizar saving. Sem o parâmetro `now`, a mesma rota sempre usa o relógio real; com `now` e `DEMO_MODE` desligado, ela responde HTTP 403.
+
+Execute `POST /demo/reset` novamente antes de repetir a apresentação.
+
+## Verificação local
+
+```powershell
+Set-Location backend
+uv run pytest -v
+
+Set-Location ../agent
+uv run pytest tests -v
+
+Set-Location ../frontend
+npm test
+npm run lint
+npm run build
+```
+
+O escopo `tests` no agente evita coletar arquivos de teste internos do template em `src/workflow/crews/test_crew/`, que exigem credenciais e não fazem parte da suíte do produto.
