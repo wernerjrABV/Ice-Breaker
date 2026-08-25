@@ -380,7 +380,11 @@ function Home() {
           </div>
         )}
 
-        <main className="chat-area chat-area-flexible" aria-live="polite">
+        <section
+          className="chat-area chat-area-flexible"
+          aria-label="Conversa do atendimento"
+          aria-live="polite"
+        >
           {loading && (
             <div className="loading-state">
               <span className="loading-dot" />
@@ -497,7 +501,7 @@ function Home() {
             </section>
           )}
           <div ref={chatEndRef} />
-        </main>
+        </section>
 
         {!loading && ticket && !finalTicket && (
           <footer className="composer-area composer-pinned">

@@ -185,6 +185,18 @@ test('keeps the chat usable while agent-event polling reconnects', async () => {
   expect(screen.getByRole('button', { name: /^sim$/i })).toBeEnabled()
 })
 
+test('uses one page main landmark while retaining the named chat container', async () => {
+  client.getTicket.mockResolvedValue(ticket())
+
+  render(<Home />)
+
+  const experience = await screen.findByRole('main', {
+    name: 'Experiência do chamado',
+  })
+  expect(screen.getAllByRole('main')).toEqual([experience])
+  expect(screen.getByLabelText('Atendimento CoolCare')).toBeInTheDocument()
+})
+
 test('starts with the proactive message and asks for equipment identification', async () => {
   const user = userEvent.setup()
   const actionResponse = ticket({
@@ -269,7 +281,10 @@ test('keeps the message history flexible and the composer pinned after it', asyn
   render(<Home />)
 
   const shell = await screen.findByLabelText('Atendimento CoolCare')
-  const chat = within(screen.getByLabelText('Atendimento CoolCare')).getByRole('main')
+  const chat = within(screen.getByLabelText('Atendimento CoolCare')).getByRole(
+    'region',
+    { name: 'Conversa do atendimento' },
+  )
   const composer = screen.getByRole('contentinfo')
   expect(shell).toHaveClass('phone-shell-flex')
   expect(chat).toHaveClass('chat-area-flexible')
