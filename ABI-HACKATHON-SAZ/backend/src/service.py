@@ -276,21 +276,14 @@ def _route_supplier(
     reason: str,
     message: str,
     extra_events: Collection[TicketEventWrite] = (),
-    include_stage_change: bool = True,
 ) -> dict[str, Any]:
     ticket = _ticket_or_raise(ticket_id)
-    stage_events = (
-        [
-            _event(
-                TicketEventCategory.STAGE_CHANGED,
-                "Etapa atualizada",
-                "O atendimento avançou para a próxima etapa.",
-                from_stage=str(ticket["stage"]),
-                to_stage=ConversationStage.FINISHED.value,
-            )
-        ]
-        if include_stage_change
-        else []
+    stage_event = _event(
+        TicketEventCategory.STAGE_CHANGED,
+        "Etapa atualizada",
+        "O atendimento avançou para a próxima etapa.",
+        from_stage=str(ticket["stage"]),
+        to_stage=ConversationStage.FINISHED.value,
     )
     db.set_ticket_state(
         ticket_id,
@@ -299,7 +292,7 @@ def _route_supplier(
         priority=priority,
         reason=reason,
         events=[
-            *stage_events,
+            stage_event,
             *extra_events,
             _event(
                 TicketEventCategory.SUPPLIER_ROUTED,
@@ -318,8 +311,6 @@ def _route_supplier(
 def _route_critical_risk(
     ticket_id: str,
     source_text: str,
-    *,
-    include_stage_change: bool = True,
 ) -> dict[str, Any]:
     decision = decide_triage(normalize_symptom(source_text), _extract_risks(source_text))
     return _route_supplier(
@@ -330,7 +321,6 @@ def _route_critical_risk(
             "Identifiquei um sinal de risco. Não manipule nem abra o equipamento; "
             "o chamado foi encaminhado com urgência ao fornecedor."
         ),
-        include_stage_change=include_stage_change,
     )
 
 
@@ -409,17 +399,6 @@ def create_case(
     ]
     if not risks:
         creation_events.insert(1, _event(TicketEventCategory.SCOPE_VALIDATED, "Escopo validado", "O equipamento está no escopo do CoolCare.", equipment_type=validated_type.value))
-    else:
-        creation_events.insert(
-            1,
-            _event(
-                TicketEventCategory.STAGE_CHANGED,
-                "Etapa atualizada",
-                "O atendimento avançou para a próxima etapa.",
-                from_stage=ConversationStage.PROXIMITY.value,
-                to_stage=ConversationStage.FINISHED.value,
-            ),
-        )
     db.create_ticket(
         ticket_id,
         nome_pdv,
@@ -429,11 +408,7 @@ def create_case(
         events=creation_events,
     )
     if risks:
-        return _route_critical_risk(
-            ticket_id,
-            source_text,
-            include_stage_change=False,
-        )
+        return _route_critical_risk(ticket_id, source_text)
     opening = (
         f"Olá! Recebi um chamado do {nome_pdv} sobre {assunto}. "
         "Quero entender melhor o que está acontecendo e verificar se já consigo ajudar "

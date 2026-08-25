@@ -44,10 +44,15 @@ def test_critical_risk_records_warning_without_agent_request():
     ticket = service.create_case("PDV", "Cheiro de queimado", "Odor no cooler")
     history = db.list_ticket_events(str(ticket["id"]))
 
-    assert [item["category"] for item in history][-2:] == [
+    assert [item["category"] for item in history][-3:] == [
         "risk_evaluated",
+        "stage_changed",
         "supplier_routed",
     ]
+    assert history[-2]["metadata"] == {
+        "from_stage": "aguardando_proximidade",
+        "to_stage": "finalizado",
+    }
     assert history[-1]["state"] == "warning"
     assert history[-1]["metadata"]["priority"] == "urgente"
     assert "agent_requested" not in categories(str(ticket["id"]))
