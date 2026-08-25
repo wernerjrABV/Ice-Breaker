@@ -59,6 +59,15 @@ npm run dev
 
 Inicie os serviços na ordem agente, back-end e front-end. A documentação interativa do back-end fica em `http://127.0.0.1:8001/docs`.
 
+## Dashboard do agente
+
+Com um chamado aberto, o painel à direita acompanha `GET /tickets/{id}/events` a cada segundo. O ID atual fica em `/home?ticketId=...`; atualizar ou compartilhar essa URL valida o chamado no back-end e reconstrói seu histórico. O cartão de **R$ 200** representa economia potencial até a confirmação positiva do PDV; somente então passa a ser economia realizada.
+
+Depois de executar o reset, abra diretamente os dois roteiros principais:
+
+- [DEMO-REMOTE — resolução remota](http://localhost:5173/home?ticketId=DEMO-REMOTE)
+- [DEMO-URGENT — encaminhamento urgente](http://localhost:5173/home?ticketId=DEMO-URGENT)
+
 ## Roteiro de demonstração repetível
 
 Em um quarto terminal, defina a URL e restaure os quatro chamados. A restauração recria somente os IDs `DEMO-*`; chamados reais ou criados manualmente são preservados.
@@ -93,6 +102,8 @@ $remote.status
 
 O status final é `resolvido_remotamente`. Esse é o único desfecho que o front-end apresenta como visita evitada de **R$ 200**.
 
+DEMO-REMOTE: acompanhe risco, identificação, checklist, confirmação e a mudança para Economia realizada — R$ 200.
+
 ### 2. Encaminhamento urgente — Cheiro de queimado
 
 Abra `DEMO-URGENT` e informe o risco. A regra determinística interrompe a triagem sem aguardar foto, checklist ou confirmação:
@@ -104,6 +115,8 @@ $urgent | Select-Object status, priority, outcome_reason
 ```
 
 O resultado é `encaminhado_fornecedor`, prioridade `urgente`, sem saving.
+
+DEMO-URGENT: acompanhe a interrupção por risco, prioridade urgente e Economia não realizada — R$ 0.
 
 ### 3. Timeout acelerado — Porta não fecha
 

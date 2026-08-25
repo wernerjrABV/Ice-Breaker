@@ -15,6 +15,7 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from 'react'
+import { AgentDashboard } from '../../components/AgentDashboard/AgentDashboard'
 import Header from '../../components/Header/Header'
 import {
   createTicket,
@@ -27,6 +28,7 @@ import {
   type Ticket,
   type TicketStatus,
 } from '../../clients/client'
+import { useTicketEvents } from '../../hooks/useTicketEvents'
 import './Home.css'
 
 const DEMO_TICKET = {
@@ -45,6 +47,17 @@ const STATUS_LABELS: Record<TicketStatus, string> = {
 
 const MAX_EXPIRY_ATTEMPTS = 3
 const EXPIRY_RETRY_DELAYS_MS = [1_000, 2_000] as const
+
+function ticketIdFromUrl(): string | null {
+  return new URLSearchParams(window.location.search).get('ticketId')?.trim() || null
+}
+
+function preserveTicketIdInUrl(ticketId: string) {
+  const url = new URL(window.location.href)
+  if (url.searchParams.get('ticketId') === ticketId) return
+  url.searchParams.set('ticketId', ticketId)
+  window.history.replaceState(window.history.state, '', url)
+}
 
 function controlledError(error: unknown): string {
   if (
@@ -107,14 +120,17 @@ function Home() {
   const [serial, setSerialValue] = useState('')
   const [now, setNow] = useState(() => Date.now())
   const chatEndRef = useRef<HTMLDivElement>(null)
-  const createdTicketIdRef = useRef<string | null>(null)
+  const createdTicketIdRef = useRef<string | null>(ticketIdFromUrl())
   const startupPromiseRef = useRef<Promise<Ticket> | null>(null)
   const expiryPromiseRef = useRef<{
     deadline: string
     promise: Promise<Ticket>
   } | null>(null)
+  const eventState = useTicketEvents(ticket?.id ?? null)
 
   const applyTicket = useCallback((current: Ticket) => {
+    createdTicketIdRef.current = current.id
+    preserveTicketIdInUrl(current.id)
     setTicket(current)
     if (current.equipment) {
       setModel(current.equipment.modelo)
@@ -346,6 +362,7 @@ function Home() {
 
   return (
     <div className="home">
+      <main className="case-experience" aria-label="Experiência do chamado">
       <section className="phone-shell phone-shell-flex" aria-label="Atendimento CoolCare">
         <Header />
 
@@ -376,7 +393,11 @@ function Home() {
           </div>
         )}
 
-        <main className="chat-area chat-area-flexible" aria-live="polite">
+        <section
+          className="chat-area chat-area-flexible"
+          aria-label="Conversa do atendimento"
+          aria-live="polite"
+        >
           {loading && (
             <div className="loading-state">
               <span className="loading-dot" />
@@ -493,7 +514,7 @@ function Home() {
             </section>
           )}
           <div ref={chatEndRef} />
-        </main>
+        </section>
 
         {!loading && ticket && !finalTicket && (
           <footer className="composer-area composer-pinned">
@@ -612,6 +633,14 @@ function Home() {
           </footer>
         )}
       </section>
+      {ticket && (
+        <AgentDashboard
+          ticket={ticket}
+          events={eventState.events}
+          connection={eventState.connection}
+        />
+      )}
+      </main>
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
@@ -10,6 +10,7 @@ const client = vi.hoisted(() => ({
   createTicket: vi.fn(),
   expireConfirmations: vi.fn(),
   getTicket: vi.fn(),
+  getTicketEvents: vi.fn(),
   listKickoffRequests: vi.fn(),
   sendMessage: vi.fn(),
   sendPhoto: vi.fn(),
@@ -134,14 +135,68 @@ const waitingTicket = ticket({
 })
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
+  window.history.replaceState({}, '', '/home')
   client.createTicket.mockResolvedValue({ id: 'T-1' })
+  client.getTicketEvents.mockResolvedValue({ items: [], last_id: 0, terminal: false })
   client.listKickoffRequests.mockResolvedValue([])
 })
 
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+})
+
+test('shows the live chat beside the agent dashboard for the same ticket', async () => {
+  client.getTicket.mockResolvedValue(ticket())
+  client.getTicketEvents.mockResolvedValue({
+    items: [{
+      id: 1,
+      ticket_id: 'T-1',
+      category: 'ticket_created',
+      title: 'Chamado recebido',
+      description: 'O CoolCare iniciou a triagem.',
+      state: 'completed',
+      metadata: { equipment_type: 'cooler' },
+      created_at: createdAt,
+    }],
+    last_id: 1,
+    terminal: false,
+  })
+
+  render(<Home />)
+
+  const experience = await screen.findByLabelText('Experiência do chamado')
+  expect(experience).toHaveClass('case-experience')
+  expect(screen.getByLabelText('Atendimento CoolCare')).toBeInTheDocument()
+  expect(screen.getByRole('region', { name: 'Inteligência do agente' })).toBeInTheDocument()
+  expect(within(await screen.findByRole('list', { name: 'Linha do tempo do agente' }))
+    .getByText('Chamado recebido')).toBeInTheDocument()
+  expect(client.getTicketEvents).toHaveBeenCalledWith('T-1', 0, 100)
+})
+
+test('keeps the chat usable while agent-event polling reconnects', async () => {
+  vi.useFakeTimers()
+  client.getTicket.mockResolvedValue(ticket())
+  client.getTicketEvents.mockRejectedValue(new Error('offline'))
+
+  render(<Home />)
+  await act(async () => undefined)
+
+  expect(screen.getByText('Reconectando')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /^sim$/i })).toBeEnabled()
+})
+
+test('uses one page main landmark while retaining the named chat container', async () => {
+  client.getTicket.mockResolvedValue(ticket())
+
+  render(<Home />)
+
+  const experience = await screen.findByRole('main', {
+    name: 'Experiência do chamado',
+  })
+  expect(screen.getAllByRole('main')).toEqual([experience])
+  expect(screen.getByLabelText('Atendimento CoolCare')).toBeInTheDocument()
 })
 
 test('starts with the proactive message and asks for equipment identification', async () => {
@@ -183,6 +238,28 @@ test('creates only one startup ticket when StrictMode replays the effect', async
   await screen.findByText(/quero entender melhor/i)
   expect(client.createTicket).toHaveBeenCalledTimes(1)
   expect(client.getTicket.mock.calls).toEqual([['T-1']])
+})
+
+test('resumes the ticket from the URL without creating another one', async () => {
+  window.history.replaceState({}, '', '/home?ticketId=DEMO-REMOTE')
+  client.getTicket.mockResolvedValue(ticket({ id: 'DEMO-REMOTE' }))
+
+  render(<Home />)
+
+  expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
+  expect(client.createTicket).not.toHaveBeenCalled()
+  expect(client.getTicket).toHaveBeenCalledWith('DEMO-REMOTE')
+  expect(window.location.pathname).toBe('/home')
+  expect(new URLSearchParams(window.location.search).get('ticketId')).toBe('DEMO-REMOTE')
+})
+
+test('stores a newly created ticket in the current URL', async () => {
+  client.getTicket.mockResolvedValue(ticket())
+
+  render(<Home />)
+
+  expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
+  expect(new URLSearchParams(window.location.search).get('ticketId')).toBe('T-1')
 })
 
 test('retries startup after a controlled create failure and recovers', async () => {
@@ -228,7 +305,10 @@ test('keeps the message history flexible and the composer pinned after it', asyn
   render(<Home />)
 
   const shell = await screen.findByLabelText('Atendimento CoolCare')
-  const chat = screen.getByRole('main')
+  const chat = within(screen.getByLabelText('Atendimento CoolCare')).getByRole(
+    'region',
+    { name: 'Conversa do atendimento' },
+  )
   const composer = screen.getByRole('contentinfo')
   expect(shell).toHaveClass('phone-shell-flex')
   expect(chat).toHaveClass('chat-area-flexible')
@@ -262,13 +342,15 @@ test('shows remote saving only after positive confirmation', async () => {
 
   expect(await screen.findByText(/aguardando confirmação/i)).toBeInTheDocument()
   expect(screen.getByText(/confirmação até/i)).toBeInTheDocument()
-  expect(screen.queryByText(/R\$ 200/)).not.toBeInTheDocument()
+  expect(
+    within(screen.getByLabelText('Atendimento CoolCare')).queryByText(/R\$ 200/),
+  ).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: /sim, resolveu/i }))
 
   expect(
     await screen.findByRole('heading', { name: /resolvido remotamente/i }),
   ).toBeInTheDocument()
-  expect(screen.getByText(/R\$ 200/)).toBeInTheDocument()
+  expect(within(screen.getByLabelText('Resultado do atendimento')).getByText(/R\$ 200/)).toBeInTheDocument()
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
 })
 
@@ -298,7 +380,7 @@ test('retains the successful final-confirmation POST when the refresh fails', as
   expect(
     await screen.findByRole('heading', { name: /resolvido remotamente/i }),
   ).toBeInTheDocument()
-  expect(screen.getByText(/R\$ 200/)).toBeInTheDocument()
+  expect(within(screen.getByLabelText('Resultado do atendimento')).getByText(/R\$ 200/)).toBeInTheDocument()
   expect(await screen.findByRole('alert')).toHaveTextContent(/obter o ticket.*rede/i)
 
   await user.click(screen.getByRole('button', { name: /tentar atualizar/i }))
@@ -336,12 +418,15 @@ test('shows supplier routing summary without remote saving', async () => {
   expect(
     await screen.findByRole('heading', { name: /encaminhado ao fornecedor/i }),
   ).toBeInTheDocument()
-  expect(screen.getByText(/CX-400.*BR-12345/i)).toBeInTheDocument()
-  expect(screen.getByText('Confira se a ventilação externa está livre.')).toBeInTheDocument()
-  expect(screen.getByText('etiqueta.jpg')).toBeInTheDocument()
-  expect(screen.getByText('problema_persistiu_apos_checklist')).toBeInTheDocument()
+  const result = screen.getByLabelText('Resultado do atendimento')
+  expect(within(result).getByText(/CX-400.*BR-12345/i)).toBeInTheDocument()
+  expect(within(result).getByText('Confira se a ventilação externa está livre.')).toBeInTheDocument()
+  expect(within(result).getByText('etiqueta.jpg')).toBeInTheDocument()
+  expect(within(result).getByText('problema_persistiu_apos_checklist')).toBeInTheDocument()
   expect(screen.queryByText(/histórico, evidências.*seguem/i)).not.toBeInTheDocument()
-  expect(screen.queryByText(/R\$ 200/)).not.toBeInTheDocument()
+  expect(
+    within(screen.getByLabelText('Atendimento CoolCare')).queryByText(/R\$ 200/),
+  ).not.toBeInTheDocument()
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
 })
 
@@ -413,9 +498,10 @@ test('renders urgent supplier evidence when equipment is not yet identified', as
   render(<Home />)
 
   await screen.findByRole('heading', { name: /encaminhado ao fornecedor/i })
-  expect(screen.getByText('Odor forte vindo do cooler')).toBeInTheDocument()
-  expect(screen.getByText('Risco crítico identificado.')).toBeInTheDocument()
-  expect(screen.getByText(/prioridade urgente/i)).toBeInTheDocument()
+  const result = screen.getByLabelText('Resultado do atendimento')
+  expect(within(result).getByText('Odor forte vindo do cooler')).toBeInTheDocument()
+  expect(within(result).getByText('Risco crítico identificado.')).toBeInTheDocument()
+  expect(within(result).getByText(/prioridade urgente/i)).toBeInTheDocument()
   expect(screen.queryByText(/histórico, evidências.*seguem/i)).not.toBeInTheDocument()
 })
 

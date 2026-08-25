@@ -227,3 +227,33 @@ def test_expiry_without_supplied_clock_uses_real_clock_for_all_tickets(
     assert response.status_code == 200
     assert response.json() == ["PAST-1"]
     assert db.get_ticket("PAST-1")["status"] == TicketStatus.SUPPLIER.value
+
+
+def test_demo_reset_recreates_demo_events_without_touching_real_events(api):
+    real = api.post(
+        "/tickets",
+        json={
+            "nome_pdv": "PDV real",
+            "assunto": "Não gela",
+            "descricao_base": "Cooler sem refrigeração",
+            "equipment_type": "cooler",
+        },
+    ).json()
+    before = api.get(f"/tickets/{real['id']}/events").json()["items"]
+
+    assert api.post("/demo/reset").status_code == 200
+    first_demo = api.get("/tickets/DEMO-REMOTE/events").json()["items"]
+    assert api.post("/demo/reset").status_code == 200
+    second_demo = api.get("/tickets/DEMO-REMOTE/events").json()["items"]
+
+    assert [item["category"] for item in first_demo] == [
+        "ticket_created",
+        "scope_validated",
+        "risk_evaluated",
+    ]
+    assert [item["category"] for item in second_demo] == [
+        "ticket_created",
+        "scope_validated",
+        "risk_evaluated",
+    ]
+    assert api.get(f"/tickets/{real['id']}/events").json()["items"] == before

@@ -18,6 +18,9 @@ from src.models import (
     SupplierEquipment,
     SupplierEvidence,
     SupplierSummary,
+    TicketEventCategory,
+    TicketEventState,
+    TicketEventWrite,
     TicketStatus,
 )
 from src.triage_rules import decide_triage, normalize_symptom
@@ -88,6 +91,22 @@ class AgentResponseError(ValueError):
 
 class EquipmentScopeError(ValueError):
     pass
+
+
+def _event(
+    category: TicketEventCategory,
+    title: str,
+    description: str,
+    state: TicketEventState = TicketEventState.COMPLETED,
+    **metadata: str | int | float | bool | None | list[str],
+) -> TicketEventWrite:
+    return TicketEventWrite(
+        category=category,
+        title=title,
+        description=description,
+        state=state,
+        metadata=metadata,
+    )
 
 
 def _normalize(text: str) -> str:
@@ -227,11 +246,21 @@ def _append_assistant(
 
 
 def _await_equipment_confirmation(ticket_id: str) -> dict[str, Any]:
+    ticket = _ticket_or_raise(ticket_id)
     db.set_ticket_state(
         ticket_id,
         TicketStatus.TRIAGE,
         ConversationStage.EQUIPMENT_CONFIRMATION,
         reason="identificacao_aguardando_confirmacao",
+        events=[
+            _event(
+                TicketEventCategory.STAGE_CHANGED,
+                "Etapa atualizada",
+                "O atendimento avançou para a próxima etapa.",
+                from_stage=str(ticket["stage"]),
+                to_stage=ConversationStage.EQUIPMENT_CONFIRMATION.value,
+            )
+        ],
     )
     return _append_assistant(
         ticket_id,
@@ -246,18 +275,43 @@ def _route_supplier(
     priority: str,
     reason: str,
     message: str,
+    extra_events: Collection[TicketEventWrite] = (),
 ) -> dict[str, Any]:
+    ticket = _ticket_or_raise(ticket_id)
+    stage_event = _event(
+        TicketEventCategory.STAGE_CHANGED,
+        "Etapa atualizada",
+        "O atendimento avançou para a próxima etapa.",
+        from_stage=str(ticket["stage"]),
+        to_stage=ConversationStage.FINISHED.value,
+    )
     db.set_ticket_state(
         ticket_id,
         TicketStatus.SUPPLIER,
         ConversationStage.FINISHED,
         priority=priority,
         reason=reason,
+        events=[
+            stage_event,
+            *extra_events,
+            _event(
+                TicketEventCategory.SUPPLIER_ROUTED,
+                "Chamado encaminhado ao fornecedor",
+                "O atendimento remoto foi encerrado e o fornecedor recebeu o encaminhamento.",
+                TicketEventState.WARNING if priority == "urgente" else TicketEventState.COMPLETED,
+                reason=reason,
+                priority=priority,
+                saving_brl=0,
+            ),
+        ],
     )
     return _append_assistant(ticket_id, message, kind="routing")
 
 
-def _route_critical_risk(ticket_id: str, source_text: str) -> dict[str, Any]:
+def _route_critical_risk(
+    ticket_id: str,
+    source_text: str,
+) -> dict[str, Any]:
     decision = decide_triage(normalize_symptom(source_text), _extract_risks(source_text))
     return _route_supplier(
         ticket_id,
@@ -280,13 +334,39 @@ def _agent_reply(ticket: dict[str, Any]) -> AgentConversationReply:
             for message in ticket["messages"]
         ],
     }
+    db.record_ticket_events(
+        str(ticket["id"]),
+        [
+            _event(
+                TicketEventCategory.AGENT_REQUESTED,
+                "Agente consultado",
+                "O agente foi consultado para orientar a próxima interação.",
+                TicketEventState.ACTIVE,
+                stage=str(ticket["stage"]),
+            )
+        ],
+    )
     raw_reply = client.request_conversation_reply(payload)
     try:
-        return AgentConversationReply.model_validate(raw_reply)
+        reply = AgentConversationReply.model_validate(raw_reply)
     except ValueError as exc:
         raise AgentResponseError(
             "O agente retornou uma resposta estruturada inválida."
         ) from exc
+    db.record_ticket_events(
+        str(ticket["id"]),
+        [
+            _event(
+                TicketEventCategory.AGENT_INTERPRETED,
+                "Resposta do agente interpretada",
+                "A orientação estruturada do agente foi validada.",
+                reply_key=reply.reply_key.value,
+                symptom=reply.symptom.value,
+                risk_flags=sorted(risk.value for risk in reply.risks),
+            )
+        ],
+    )
+    return reply
 
 
 def _render_agent_reply(
@@ -313,12 +393,19 @@ def create_case(
     validated_type = EquipmentType(equipment_type)
     if not risks:
         validated_type = _validate_equipment_scope(validated_type, source_text)
+    creation_events = [
+        _event(TicketEventCategory.TICKET_CREATED, "Chamado recebido", "O CoolCare iniciou a triagem.", equipment_type=validated_type.value),
+        _event(TicketEventCategory.RISK_EVALUATED, "Risco verificado", "A descrição inicial foi avaliada por regras de segurança.", detected=bool(risks), risk_flags=sorted(risk.value for risk in risks)),
+    ]
+    if not risks:
+        creation_events.insert(1, _event(TicketEventCategory.SCOPE_VALIDATED, "Escopo validado", "O equipamento está no escopo do CoolCare.", equipment_type=validated_type.value))
     db.create_ticket(
         ticket_id,
         nome_pdv,
         assunto,
         descricao_base,
         validated_type,
+        events=creation_events,
     )
     if risks:
         return _route_critical_risk(ticket_id, source_text)
@@ -347,6 +434,15 @@ def handle_text(
                 "Como não houve confirmação do PDV em 30 minutos, "
                 "o chamado foi encaminhado ao fornecedor."
             ),
+            extra_events=[
+                _event(
+                    TicketEventCategory.CONFIRMATION_EXPIRED,
+                    "Confirmação expirada",
+                    "O prazo para confirmação do PDV foi encerrado.",
+                    reason="sem_confirmacao_pdv",
+                    priority=str(ticket["priority"]),
+                )
+            ],
         )
     risks = _extract_risks(text)
     if risks:
@@ -367,6 +463,15 @@ def handle_text(
                 ticket_id,
                 TicketStatus.TRIAGE,
                 ConversationStage.IDENTIFICATION,
+                events=[
+                    _event(
+                        TicketEventCategory.STAGE_CHANGED,
+                        "Etapa atualizada",
+                        "O atendimento avançou para a próxima etapa.",
+                        from_stage=str(ticket["stage"]),
+                        to_stage=ConversationStage.IDENTIFICATION.value,
+                    )
+                ],
             )
             return _append_assistant(
                 ticket_id,
@@ -388,6 +493,22 @@ def handle_text(
                 TicketStatus.REMOTE_RESOLVED,
                 ConversationStage.FINISHED,
                 reason="confirmacao_positiva_pdv",
+                events=[
+                    _event(
+                        TicketEventCategory.STAGE_CHANGED,
+                        "Etapa atualizada",
+                        "O atendimento avançou para a próxima etapa.",
+                        from_stage=str(ticket["stage"]),
+                        to_stage=ConversationStage.FINISHED.value,
+                    ),
+                    _event(
+                        TicketEventCategory.TICKET_RESOLVED,
+                        "Chamado resolvido remotamente",
+                        "O PDV confirmou que o equipamento voltou a funcionar.",
+                        reason="confirmacao_positiva_pdv",
+                        saving_brl=200,
+                    ),
+                ],
             )
             return _append_assistant(
                 ticket_id,
@@ -402,6 +523,15 @@ def handle_text(
                 TicketStatus.TRIAGE,
                 ConversationStage.IDENTIFICATION,
                 reason="correcao_identificacao_necessaria",
+                events=[
+                    _event(
+                        TicketEventCategory.STAGE_CHANGED,
+                        "Etapa atualizada",
+                        "O atendimento avançou para a próxima etapa.",
+                        from_stage=str(ticket["stage"]),
+                        to_stage=ConversationStage.IDENTIFICATION.value,
+                    )
+                ],
             )
             return _append_assistant(
                 ticket_id,
@@ -409,6 +539,24 @@ def handle_text(
                 kind="identification",
             )
         if _is_affirmative(text):
+            equipment = ticket["equipment"]
+            if equipment is None:
+                raise InvalidTransitionError(
+                    "A confirmação exige identificação do equipamento."
+                )
+            db.record_ticket_events(
+                ticket_id,
+                [
+                    _event(
+                        TicketEventCategory.EQUIPMENT_CONFIRMED,
+                        "Equipamento confirmado",
+                        "O PDV confirmou os dados de identificação do equipamento.",
+                        model=str(equipment["modelo"]),
+                        serial=str(equipment["numero_serie"]),
+                        confidence=float(equipment["confianca"]),
+                    )
+                ],
+            )
             return _diagnose(ticket_id)
 
     reply = _agent_reply(_ticket_or_raise(ticket_id))
@@ -453,6 +601,16 @@ def _diagnose(ticket_id: str) -> dict[str, Any]:
                 if urgent
                 else "Este caso requer atendimento técnico e foi encaminhado ao fornecedor."
             ),
+            extra_events=[
+                _event(
+                    TicketEventCategory.TRIAGE_DECISION,
+                    "Decisão de triagem registrada",
+                    "A triagem definiu que o caso requer atendimento do fornecedor.",
+                    outcome=decision.outcome.value,
+                    priority=decision.priority.value,
+                    reason=decision.reason,
+                )
+            ],
         )
 
     deadline = datetime.now(timezone.utc) + _CONFIRMATION_WINDOW
@@ -463,8 +621,43 @@ def _diagnose(ticket_id: str) -> dict[str, Any]:
         deadline,
         priority=decision.priority.value,
         reason=decision.reason,
+        events=[
+            _event(
+                TicketEventCategory.STAGE_CHANGED,
+                "Etapa atualizada",
+                "O atendimento avançou para a próxima etapa.",
+                from_stage=str(ticket["stage"]),
+                to_stage=ConversationStage.CONFIRMATION.value,
+            ),
+            _event(
+                TicketEventCategory.TRIAGE_DECISION,
+                "Decisão de triagem registrada",
+                "A triagem definiu as verificações remotas aplicáveis.",
+                outcome=decision.outcome.value,
+                priority=decision.priority.value,
+                reason=decision.reason,
+            ),
+            _event(
+                TicketEventCategory.CONFIRMATION_WAITING,
+                "Aguardando confirmação do PDV",
+                "O PDV recebeu as verificações e deve confirmar o resultado.",
+                TicketEventState.WAITING,
+                deadline=deadline.isoformat(),
+            ),
+        ],
     )
-    db.record_checklist_actions(ticket_id, decision.checklist)
+    db.record_checklist_actions(
+        ticket_id,
+        decision.checklist,
+        events=[
+            _event(
+                TicketEventCategory.CHECKLIST_SENT,
+                "Checklist enviado",
+                "As verificações seguras foram registradas para o atendimento remoto.",
+                actions=list(decision.checklist),
+            )
+        ],
+    )
     checklist = " ".join(
         f"{index}. {item}" for index, item in enumerate(decision.checklist, start=1)
     )
@@ -485,14 +678,41 @@ def handle_label(
     numero_serie = str(label.get("numero_serie", ""))
     confianca = float(label.get("confianca", 0.0))
     _validate_equipment_scope(str(ticket["equipment_type"]), modelo)
-    db.set_equipment(ticket_id, modelo, numero_serie, confianca, image_name)
+    manual_required = confianca < _OCR_CONFIDENCE_THRESHOLD or not numero_serie.strip()
+    db.set_equipment(
+        ticket_id,
+        modelo,
+        numero_serie,
+        confianca,
+        image_name,
+        events=[
+            _event(
+                TicketEventCategory.OCR_COMPLETED,
+                "Leitura da etiqueta concluída",
+                "Modelo, serial e confiança foram extraídos da etiqueta.",
+                model=modelo,
+                serial=numero_serie,
+                confidence=confianca,
+                manual_required=manual_required,
+            )
+        ],
+    )
 
-    if confianca < _OCR_CONFIDENCE_THRESHOLD or not numero_serie.strip():
+    if manual_required:
         db.set_ticket_state(
             ticket_id,
             TicketStatus.TRIAGE,
             ConversationStage.IDENTIFICATION,
             reason="identificacao_manual_necessaria",
+            events=[
+                _event(
+                    TicketEventCategory.STAGE_CHANGED,
+                    "Etapa atualizada",
+                    "O atendimento avançou para a próxima etapa.",
+                    from_stage=str(ticket["stage"]),
+                    to_stage=ConversationStage.IDENTIFICATION.value,
+                )
+            ],
         )
         return _append_assistant(
             ticket_id,
@@ -534,6 +754,15 @@ def expire_confirmations(
                 "Como não houve confirmação do PDV em 30 minutos, "
                 "o chamado foi encaminhado ao fornecedor."
             ),
+            extra_events=[
+                _event(
+                    TicketEventCategory.CONFIRMATION_EXPIRED,
+                    "Confirmação expirada",
+                    "O prazo para confirmação do PDV foi encerrado.",
+                    reason="sem_confirmacao_pdv",
+                    priority=str(ticket["priority"]),
+                )
+            ],
         )
         expired_ids.append(ticket_id)
     return expired_ids
