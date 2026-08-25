@@ -9,15 +9,20 @@ export interface TicketEventsState {
   error: string | null
 }
 
+interface TicketEventsInternalState extends TicketEventsState {
+  ticketId: string | null
+}
+
 const PAGE_LIMIT = 100
 const POLL_MS = 1_000
 const RETRY_MS = [1_000, 2_000, 4_000, 5_000] as const
 
 export function useTicketEvents(ticketId: string | null): TicketEventsState {
-  const [state, setState] = useState<TicketEventsState>({
+  const [state, setState] = useState<TicketEventsInternalState>({
     events: [],
     connection: ticketId ? 'loading' : 'idle',
     error: null,
+    ticketId,
   })
 
   useEffect(() => {
@@ -27,7 +32,6 @@ export function useTicketEvents(ticketId: string | null): TicketEventsState {
     let failures = 0
     let timer: number | undefined
 
-    setState({ events: [], connection: ticketId ? 'loading' : 'idle', error: null })
     if (!ticketId) return () => { active = false }
 
     const schedule = (delay: number) => {
@@ -43,12 +47,14 @@ export function useTicketEvents(ticketId: string | null): TicketEventsState {
         lastId = Math.max(lastId, response.last_id)
         failures = 0
         setState((current) => {
-          const byId = new Map(current.events.map((item) => [item.id, item]))
+          const previousEvents = current.ticketId === ticketId ? current.events : []
+          const byId = new Map(previousEvents.map((item) => [item.id, item]))
           response.items.forEach((item) => byId.set(item.id, item))
           return {
             events: [...byId.values()].sort((left, right) => left.id - right.id),
             connection: response.terminal ? 'complete' : 'active',
             error: null,
+            ticketId,
           }
         })
         if (response.items.length === PAGE_LIMIT) schedule(0)
@@ -58,9 +64,10 @@ export function useTicketEvents(ticketId: string | null): TicketEventsState {
         const delay = RETRY_MS[Math.min(failures, RETRY_MS.length - 1)]
         failures += 1
         setState((current) => ({
-          ...current,
+          events: current.ticketId === ticketId ? current.events : [],
           connection: 'reconnecting',
           error: 'Acompanhamento temporariamente indisponível.',
+          ticketId,
         }))
         schedule(delay)
       } finally {
@@ -74,6 +81,10 @@ export function useTicketEvents(ticketId: string | null): TicketEventsState {
       if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [ticketId])
+
+  if (state.ticketId !== ticketId) {
+    return { events: [], connection: ticketId ? 'loading' : 'idle', error: null }
+  }
 
   return state
 }

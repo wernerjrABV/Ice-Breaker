@@ -1,4 +1,5 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, render, renderHook } from '@testing-library/react'
+import { useLayoutEffect } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { TicketEvent, TicketEventsResponse } from '../clients/client'
 
@@ -10,7 +11,7 @@ vi.mock('../clients/client', async (importOriginal) => ({
 }))
 
 import * as client from '../clients/client'
-import { useTicketEvents } from './useTicketEvents'
+import { useTicketEvents, type TicketEventsState } from './useTicketEvents'
 
 const mockedGetTicketEvents = vi.mocked(client.getTicketEvents)
 
@@ -89,4 +90,29 @@ test('keeps events and backs off at one, two, four, then five seconds', async ()
 
   expect(result.current.events.map((item) => item.id)).toEqual([1, 2])
   expect(result.current.connection).toBe('active')
+})
+
+test('never renders the previous ticket events while resetting for a new ticket', async () => {
+  const observed: Array<{ ticketId: string; state: TicketEventsState }> = []
+  mockedGetTicketEvents
+    .mockResolvedValueOnce({ items: [event(1)], last_id: 1, terminal: false })
+    .mockImplementationOnce(() => new Promise(() => undefined))
+
+  function Probe({ ticketId }: { ticketId: string }) {
+    const state = useTicketEvents(ticketId)
+    useLayoutEffect(() => {
+      observed.push({ ticketId, state })
+    }, [state, ticketId])
+    return null
+  }
+
+  const { rerender } = render(<Probe ticketId="T-1" />)
+  await act(async () => undefined)
+  rerender(<Probe ticketId="T-2" />)
+
+  expect(observed.filter(({ ticketId }) => ticketId === 'T-2')).toEqual([
+    expect.objectContaining({
+      state: expect.objectContaining({ events: [], connection: 'loading', error: null }),
+    }),
+  ])
 })
