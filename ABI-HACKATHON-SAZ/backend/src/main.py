@@ -6,13 +6,13 @@ from datetime import datetime
 from typing import Any
 
 import requests
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 
 from src import client, db, demo_data, service
 from src.client import call_agent_kickoff
-from src.models import EquipmentType, TicketResponse, TicketStatus
+from src.models import EquipmentType, TicketEventsResponse, TicketResponse, TicketStatus
 
 
 @asynccontextmanager
@@ -92,6 +92,25 @@ def create_ticket(request: CreateTicketRequest) -> TicketResponse:
 @app.get("/tickets/{ticket_id}", response_model=TicketResponse)
 def get_ticket(ticket_id: str) -> TicketResponse:
     return _present_ticket(_ticket_or_404(ticket_id))
+
+
+@app.get("/tickets/{ticket_id}/events", response_model=TicketEventsResponse)
+def get_ticket_events(
+    ticket_id: str,
+    after: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+) -> TicketEventsResponse:
+    ticket = _ticket_or_404(ticket_id)
+    items = db.list_ticket_events(ticket_id, after=after, limit=limit)
+    last_id = int(items[-1]["id"]) if items else after
+    return TicketEventsResponse.model_validate({
+        "items": items,
+        "last_id": last_id,
+        "terminal": ticket["status"] in {
+            TicketStatus.REMOTE_RESOLVED.value,
+            TicketStatus.SUPPLIER.value,
+        },
+    })
 
 
 @app.post("/tickets/{ticket_id}/messages", response_model=TicketResponse)

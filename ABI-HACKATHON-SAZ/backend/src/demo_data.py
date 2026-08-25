@@ -3,7 +3,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from src import db
-from src.models import ConversationStage, EquipmentType, TicketStatus
+from src.models import (
+    ConversationStage,
+    EquipmentType,
+    TicketEventCategory,
+    TicketEventWrite,
+    TicketStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -56,7 +62,34 @@ def _opening(case: DemoCase) -> str:
     )
 
 
+def _initial_events(case: DemoCase) -> list[TicketEventWrite]:
+    return [
+        TicketEventWrite(
+            category=TicketEventCategory.TICKET_CREATED,
+            title="Chamado recebido",
+            description="O CoolCare iniciou a triagem.",
+            state="completed",
+            metadata={"equipment_type": case.equipment_type.value},
+        ),
+        TicketEventWrite(
+            category=TicketEventCategory.SCOPE_VALIDATED,
+            title="Escopo validado",
+            description="O equipamento está no escopo do CoolCare.",
+            state="completed",
+            metadata={"equipment_type": case.equipment_type.value},
+        ),
+        TicketEventWrite(
+            category=TicketEventCategory.RISK_EVALUATED,
+            title="Risco verificado",
+            description="A descrição inicial foi avaliada por regras de segurança.",
+            state="completed",
+            metadata={"detected": False, "risk_flags": []},
+        ),
+    ]
+
+
 def _delete_case(conn: sqlite3.Connection, ticket_id: str) -> None:
+    conn.execute("DELETE FROM ticket_events WHERE ticket_id = ?", (ticket_id,))
     conn.execute("DELETE FROM checklist_actions WHERE ticket_id = ?", (ticket_id,))
     conn.execute("DELETE FROM equipment WHERE ticket_id = ?", (ticket_id,))
     conn.execute("DELETE FROM messages WHERE ticket_id = ?", (ticket_id,))
@@ -94,6 +127,7 @@ def _insert_case(conn: sqlite3.Connection, case: DemoCase) -> None:
         """,
         (case.ticket_id, _opening(case), now),
     )
+    db._insert_ticket_events(conn, case.ticket_id, _initial_events(case))
 
 
 def _case_is_complete(conn: sqlite3.Connection, case: DemoCase) -> bool:
@@ -132,10 +166,24 @@ def _case_is_complete(conn: sqlite3.Connection, case: DemoCase) -> bool:
         (case.ticket_id,),
     ).fetchone()
     expected_opening = ("assistant", _opening(case), "opening")
+    event_categories = conn.execute(
+        """
+        SELECT category
+        FROM ticket_events
+        WHERE ticket_id = ?
+        ORDER BY id
+        """,
+        (case.ticket_id,),
+    ).fetchall()
     return (
         len(openings) == 1
         and tuple(openings[0]) == expected_opening
         and tuple(first_message) == expected_opening
+        and [category[0] for category in event_categories] == [
+            TicketEventCategory.TICKET_CREATED.value,
+            TicketEventCategory.SCOPE_VALIDATED.value,
+            TicketEventCategory.RISK_EVALUATED.value,
+        ]
     )
 
 

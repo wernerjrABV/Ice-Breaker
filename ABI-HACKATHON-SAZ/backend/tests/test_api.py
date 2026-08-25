@@ -453,3 +453,38 @@ def test_agent_clients_post_to_expected_endpoint(
             {"json": payload, "timeout": 300},
         )
     ]
+
+
+def test_ticket_events_endpoint_is_incremental_and_terminal(api):
+    created = api.post(
+        "/tickets",
+        json={
+            "nome_pdv": "Bar do João",
+            "assunto": "Cheiro de queimado",
+            "descricao_base": "Odor no cooler",
+            "equipment_type": "cooler",
+        },
+    ).json()
+
+    first = api.get(f"/tickets/{created['id']}/events", params={"limit": 1})
+    assert first.status_code == 200
+    assert len(first.json()["items"]) == 1
+    assert first.json()["terminal"] is True
+
+    after = first.json()["last_id"]
+    second = api.get(
+        f"/tickets/{created['id']}/events",
+        params={"after": after, "limit": 100},
+    )
+    assert second.status_code == 200
+    assert all(item["id"] > after for item in second.json()["items"])
+    assert second.json()["last_id"] >= after
+
+
+@pytest.mark.parametrize("query", ["after=-1", "limit=0", "limit=201"])
+def test_ticket_events_endpoint_validates_bounds(api, query):
+    assert api.get(f"/tickets/T-1/events?{query}").status_code == 422
+
+
+def test_ticket_events_endpoint_returns_404_for_missing_ticket(api):
+    assert api.get("/tickets/missing/events").status_code == 404
