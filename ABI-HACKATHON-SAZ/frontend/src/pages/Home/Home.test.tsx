@@ -231,6 +231,25 @@ test('does not create a ticket when Home has no ticketId', async () => {
   expect(client.getTicket).not.toHaveBeenCalled()
 })
 
+test('labels internal updates and keeps external messages white', async () => {
+  client.getTicket.mockResolvedValue(ticket({
+    messages: [
+      message('internal', 'Iniciou conversa com o PDV', 'internal_status'),
+      message('assistant', 'Você está próximo ao equipamento?', 'opening'),
+      message('user', 'Sim', 'text'),
+    ],
+  }))
+
+  render(<Home />)
+
+  const internalLabel = await screen.findByText('Atualização interna')
+  expect(internalLabel.closest('.chat-bubble')).toHaveClass('chat-bubble-internal')
+  expect(screen.getByText('Mensagem para o PDV').closest('.chat-bubble'))
+    .toHaveClass('chat-bubble-assistant')
+  expect(screen.getByText('Resposta do PDV').closest('.chat-bubble'))
+    .toHaveClass('chat-bubble-user')
+})
+
 test('resumes the ticket from the URL without creating another one', async () => {
   window.history.replaceState({}, '', '/home?ticketId=DEMO-REMOTE')
   client.getTicket.mockResolvedValue(ticket({ id: 'DEMO-REMOTE' }))

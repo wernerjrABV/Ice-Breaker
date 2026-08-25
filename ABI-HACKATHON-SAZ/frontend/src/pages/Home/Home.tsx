@@ -84,9 +84,14 @@ function isUrgentRouting(ticket: Ticket): boolean {
 }
 
 function MessageBubble({ item }: { item: Message }) {
+  const messageLabel = item.role === 'internal'
+    ? 'Atualização interna'
+    : item.role === 'assistant' ? 'Mensagem para o PDV' : 'Resposta do PDV'
+
   return (
     <li className={`chat-row chat-row-${item.role}`}>
       <article className={`chat-bubble chat-bubble-${item.role}`}>
+        <span className="message-origin">{messageLabel}</span>
         <p>{item.content}</p>
         <time dateTime={item.created_at}>{formatMessageTime(item.created_at)}</time>
       </article>

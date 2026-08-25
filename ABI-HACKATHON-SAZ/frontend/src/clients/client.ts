@@ -91,7 +91,9 @@ export type TicketEventCategory =
   | 'agent_requested' | 'agent_interpreted' | 'ocr_completed'
   | 'equipment_confirmed' | 'triage_decision' | 'checklist_sent'
   | 'confirmation_waiting' | 'ticket_resolved' | 'supplier_routed'
-  | 'confirmation_expired'
+  | 'confirmation_expired' | 'initial_triage_started'
+  | 'initial_triage_routed_supplier' | 'pdv_conversation_started'
+  | 'remote_solution_found'
 
 export type TicketEventState = 'completed' | 'active' | 'waiting' | 'warning' | 'failed'
 export type TicketEventMetadataValue = string | number | boolean | null | string[]

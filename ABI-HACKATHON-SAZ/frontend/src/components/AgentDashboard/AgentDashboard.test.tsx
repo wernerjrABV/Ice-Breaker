@@ -3,6 +3,7 @@ import { afterEach, expect, test } from 'vitest'
 import type { Ticket, TicketEvent } from '../../clients/client'
 import { AgentDashboard } from './AgentDashboard'
 import { savingPresentation } from './AgentMetrics'
+import { eventCategoryLabels } from './eventPresentation'
 
 afterEach(cleanup)
 
@@ -51,6 +52,15 @@ test.each([
   ['encaminhado_fornecedor', 'Economia n\u00e3o realizada', 'R$ 0', 'Atendimento encaminhado'],
 ] as const)('derives saving only from status %s', (status, label, value, note) => {
   expect(savingPresentation(status)).toMatchObject({ label, value, note })
+})
+
+test.each([
+  ['initial_triage_started', 'Triagem inicial iniciada'],
+  ['initial_triage_routed_supplier', 'Encaminhamento inicial ao fornecedor'],
+  ['pdv_conversation_started', 'Conversa com o PDV iniciada'],
+  ['remote_solution_found', 'Solução remota encontrada'],
+] as const)('presents the new event category %s in Portuguese', (category, label) => {
+  expect(eventCategoryLabels[category]).toBe(label)
 })
 
 test('renders decision focus, safe signals, and chronological events', () => {
