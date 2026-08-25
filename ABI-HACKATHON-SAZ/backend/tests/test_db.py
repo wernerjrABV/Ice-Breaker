@@ -157,6 +157,64 @@ def test_ticket_events_are_ordered_and_filtered_incrementally(tmp_path, monkeypa
     assert remaining[0]["created_at"].endswith("+00:00")
 
 
+@pytest.mark.parametrize(
+    "metadata_key",
+    [
+        "credentials",
+        "user_message",
+        "model_response",
+        "traceback",
+        "system_prompt",
+        "chain_of_thought",
+        "RAW-RESPONSE",
+    ],
+)
+def test_ticket_event_metadata_rejects_prohibited_key_variants(metadata_key):
+    with pytest.raises(ValueError):
+        TicketEventWrite(
+            category=TicketEventCategory.AGENT_INTERPRETED,
+            title="Agente interpretou",
+            description="Resposta validada.",
+            state=TicketEventState.COMPLETED,
+            metadata={metadata_key: "not allowed"},
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata_key",
+    [
+        "equipment_type",
+        "detected",
+        "risk_flags",
+        "from_stage",
+        "to_stage",
+        "stage",
+        "reply_key",
+        "symptom",
+        "model",
+        "serial",
+        "confidence",
+        "manual_required",
+        "outcome",
+        "priority",
+        "reason",
+        "actions",
+        "deadline",
+        "saving_brl",
+    ],
+)
+def test_ticket_event_metadata_accepts_approved_keys(metadata_key):
+    event = TicketEventWrite(
+        category=TicketEventCategory.AGENT_INTERPRETED,
+        title="Agente interpretou",
+        description="Resposta validada.",
+        state=TicketEventState.COMPLETED,
+        metadata={metadata_key: "allowed"},
+    )
+
+    assert event.metadata == {metadata_key: "allowed"}
+
+
 def test_ticket_event_metadata_rejects_nested_or_sensitive_values():
     with pytest.raises(ValueError):
         TicketEventWrite(

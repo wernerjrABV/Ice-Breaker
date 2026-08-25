@@ -180,8 +180,35 @@ class TicketEventWrite(BaseModel):
         cls,
         metadata: dict[str, TicketEventMetadataValue],
     ) -> dict[str, TicketEventMetadataValue]:
-        forbidden = {"prompt", "raw_response", "token", "api_key", "stack_trace", "message"}
-        if forbidden.intersection(key.casefold() for key in metadata):
+        forbidden_categories = (
+            "prompt",
+            "credential",
+            "password",
+            "secret",
+            "apikey",
+            "token",
+            "authorization",
+            "message",
+            "rawresponse",
+            "modelresponse",
+            "response",
+            "stacktrace",
+            "traceback",
+            "errortrace",
+            "chainofthought",
+            "thought",
+            "reasoning",
+            "cot",
+        )
+        normalized_keys = (
+            "".join(character for character in key.casefold() if character.isalnum())
+            for key in metadata
+        )
+        if any(
+            category in normalized_key
+            for normalized_key in normalized_keys
+            for category in forbidden_categories
+        ):
             raise ValueError("Metadado sensível não é permitido em eventos.")
         if any(
             isinstance(value, list) and not all(isinstance(item, str) for item in value)
