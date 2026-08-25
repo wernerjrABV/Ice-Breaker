@@ -3,7 +3,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src import db, service
-from src.models import ConversationStage, EquipmentType, TicketStatus
+from src.models import ConversationStage, EquipmentType, Priority, TicketStatus
+from src.triage_rules import decide_initial_triage
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +22,120 @@ def test_create_case_uses_exact_backend_owned_opening():
         "Quero entender melhor o que está acontecendo e verificar se já consigo ajudar "
         "você agora. Você está próximo ao equipamento?"
     )
+
+
+def test_demo_case_starts_pdv_conversation_for_remote_symptom():
+    ticket = service.create_demo_case("Cooler não gela")
+
+    assert [message["content"] for message in ticket["messages"][:2]] == [
+        "Enviado ao agente para primeira triagem",
+        "Iniciou conversa com o PDV",
+    ]
+    assert ticket["messages"][0]["role"] == "internal"
+    assert ticket["status"] == TicketStatus.TRIAGE.value
+
+
+def test_demo_case_routes_risk_without_customer_message():
+    ticket = service.create_demo_case("Cooler com cheiro de queimado")
+
+    assert ticket["status"] == TicketStatus.SUPPLIER.value
+    assert [message["content"] for message in ticket["messages"]] == [
+        "Enviado ao agente para primeira triagem",
+        "Enviado para o fornecedor",
+    ]
+
+
+def test_demo_case_routes_damaged_cable_risk_urgently_with_internal_updates():
+    ticket = service.create_demo_case("Cooler com cabo está danificado")
+    history = db.list_ticket_events(str(ticket["id"]))
+
+    assert ticket["status"] == TicketStatus.SUPPLIER.value
+    assert ticket["priority"] == Priority.URGENT.value
+    assert [message["content"] for message in ticket["messages"]] == [
+        "Enviado ao agente para primeira triagem",
+        "Enviado para o fornecedor",
+    ]
+    assert [event["category"] for event in history][-2:] == [
+        "stage_changed",
+        "supplier_routed",
+    ]
+    assert any(
+        event["category"] == "initial_triage_routed_supplier"
+        and event["metadata"] == {
+            "reason": "Risco crítico identificado.",
+            "priority": "urgente",
+            "requires_pdv_contact": False,
+        }
+        for event in history
+    )
+
+
+@pytest.mark.parametrize(
+    ("subject", "requires_pdv_contact", "priority"),
+    [
+        ("Cooler não gela", True, Priority.NORMAL),
+        ("Solicito visita do fornecedor", False, Priority.NORMAL),
+        ("Cooler não gela com cheiro de queimado", False, Priority.URGENT),
+    ],
+)
+def test_initial_triage_uses_deterministic_priority_order(
+    subject, requires_pdv_contact, priority
+):
+    decision = decide_initial_triage(subject)
+
+    assert decision.requires_pdv_contact is requires_pdv_contact
+    assert decision.priority is priority
+
+
+def test_agent_payload_omits_internal_messages(monkeypatch):
+    ticket = service.create_demo_case("Cooler não gela")
+    captured = {}
+
+    def reply(payload):
+        captured["payload"] = payload
+        return {
+            "reply_key": "confirmar_proximidade",
+            "risks": [],
+            "symptom": "nao_gela",
+        }
+
+    monkeypatch.setattr(service.client, "request_conversation_reply", reply)
+
+    service.handle_text(ticket["id"], "talvez")
+
+    assert all(
+        message["role"] != "internal" for message in captured["payload"]["messages"]
+    )
+
+
+def test_remote_solution_records_internal_update_before_closing_message():
+    ticket = service.create_demo_case("Cooler não gela")
+    service.handle_text(ticket["id"], "sim")
+    service.handle_serial(ticket["id"], "CX-400", "BR-123")
+    service.handle_text(ticket["id"], "sim, os dados estão corretos")
+
+    resolved = service.handle_text(ticket["id"], "sim, resolveu")
+
+    assert [message["content"] for message in resolved["messages"][-2:]] == [
+        "Solução encontrada pelo agente",
+        "Ótimo! O problema foi corrigido e o chamado está fechado.",
+    ]
+    assert resolved["messages"][-2]["role"] == "internal"
+
+
+def test_unsolved_remote_case_records_internal_update_before_supplier_message():
+    ticket = service.create_demo_case("Cooler não gela")
+    service.handle_text(ticket["id"], "sim")
+    service.handle_serial(ticket["id"], "CX-400", "BR-123")
+    service.handle_text(ticket["id"], "sim, os dados estão corretos")
+
+    routed = service.handle_text(ticket["id"], "não resolveu")
+
+    assert [message["content"] for message in routed["messages"][-2:]] == [
+        "Não encontrou solução; atendimento seguirá com o fornecedor",
+        "Como o problema continua, encaminhei o chamado ao fornecedor.",
+    ]
+    assert routed["messages"][-2]["role"] == "internal"
 
 
 @pytest.mark.parametrize(

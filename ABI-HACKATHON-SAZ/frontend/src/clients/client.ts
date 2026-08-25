@@ -18,9 +18,9 @@ export type ConversationStage =
 
 export interface Message {
   id?: number
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'internal'
   content: string
-  kind: 'text' | 'opening' | 'conversation' | 'identification' | 'routing' | 'resolution' | 'checklist'
+  kind: 'text' | 'opening' | 'conversation' | 'identification' | 'routing' | 'resolution' | 'checklist' | 'internal_status'
   created_at: string
 }
 
@@ -91,7 +91,9 @@ export type TicketEventCategory =
   | 'agent_requested' | 'agent_interpreted' | 'ocr_completed'
   | 'equipment_confirmed' | 'triage_decision' | 'checklist_sent'
   | 'confirmation_waiting' | 'ticket_resolved' | 'supplier_routed'
-  | 'confirmation_expired'
+  | 'confirmation_expired' | 'initial_triage_started'
+  | 'initial_triage_routed_supplier' | 'pdv_conversation_started'
+  | 'remote_solution_found'
 
 export type TicketEventState = 'completed' | 'active' | 'waiting' | 'warning' | 'failed'
 export type TicketEventMetadataValue = string | number | boolean | null | string[]
@@ -144,6 +146,16 @@ export async function createTicket(
       descricao_base: descricaoBase,
       equipment_type: equipmentType,
     }),
+  }, 'Não foi possível criar o ticket')
+
+  return readResponse(response, 'Não foi possível criar o ticket')
+}
+
+export async function createDemoTicket(assunto: string): Promise<{ id: string }> {
+  const response = await request(`${API_BASE_URL}/demo/tickets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assunto }),
   }, 'Não foi possível criar o ticket')
 
   return readResponse(response, 'Não foi possível criar o ticket')

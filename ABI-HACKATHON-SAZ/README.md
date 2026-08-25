@@ -68,6 +68,13 @@ Depois de executar o reset, abra diretamente os dois roteiros principais:
 - [DEMO-REMOTE — resolução remota](http://localhost:5173/home?ticketId=DEMO-REMOTE)
 - [DEMO-URGENT — encaminhamento urgente](http://localhost:5173/home?ticketId=DEMO-URGENT)
 
+## Abertura de chamado
+
+Na página inicial, informe somente o assunto para abrir um chamado do **PDV Demonstração**. O CoolCare registra a decisão operacional como uma atualização interna amarela; as mensagens trocadas com o PDV permanecem brancas.
+
+- `Cooler não gela` inicia a conversa de triagem com o PDV (o fluxo representa o canal de WhatsApp, sem disparar uma mensagem real).
+- `Cheiro de queimado no cooler` é encaminhado diretamente ao fornecedor por ser um risco de segurança.
+
 ## Roteiro de demonstração repetível
 
 Em um quarto terminal, defina a URL e restaure os quatro chamados. A restauração recria somente os IDs `DEMO-*`; chamados reais ou criados manualmente são preservados.

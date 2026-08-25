@@ -1,4 +1,11 @@
-import type { TicketEventState } from '../../clients/client'
+import type { TicketEventCategory, TicketEventState } from '../../clients/client'
+
+export const eventCategoryLabels: Partial<Record<TicketEventCategory, string>> = {
+  initial_triage_started: 'Triagem inicial iniciada',
+  initial_triage_routed_supplier: 'Encaminhamento inicial ao fornecedor',
+  pdv_conversation_started: 'Conversa com o PDV iniciada',
+  remote_solution_found: 'Solução remota encontrada',
+}
 
 export const eventStateLabels: Record<TicketEventState, string> = {
   completed: 'Concluído',

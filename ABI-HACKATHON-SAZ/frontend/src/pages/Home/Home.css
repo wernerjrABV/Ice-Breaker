@@ -273,7 +273,23 @@
 
 .chat-bubble-user {
   border-radius: 14px 7px 14px 14px;
-  background: #d9f5e6;
+  background: #fff;
+}
+
+.chat-bubble-internal {
+  border-radius: 10px;
+  background: #fff2b8;
+  border: 1px solid #d6a400;
+  box-shadow: none;
+}
+
+.message-origin {
+  display: block;
+  margin-bottom: 3px;
+  color: #52635d;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.2;
 }
 
 .chat-bubble p {

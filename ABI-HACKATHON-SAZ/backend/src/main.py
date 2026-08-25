@@ -8,7 +8,7 @@ from typing import Any
 import requests
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src import client, db, demo_data, service
 from src.client import call_agent_kickoff
@@ -46,6 +46,20 @@ class CreateTicketRequest(BaseModel):
             raise ValueError(
                 "O tipo de equipamento deve ser cooler ou geladeira."
             ) from exc
+
+
+class CreateDemoTicketRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    assunto: str = Field(min_length=1, max_length=500)
+
+    @field_validator("assunto")
+    @classmethod
+    def strip_subject(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("O assunto é obrigatório.")
+        return value
 
 
 class MessageRequest(BaseModel):
@@ -87,6 +101,11 @@ def create_ticket(request: CreateTicketRequest) -> TicketResponse:
         )
     except service.EquipmentScopeError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/demo/tickets", status_code=201, response_model=TicketResponse)
+def create_demo_ticket(request: CreateDemoTicketRequest) -> TicketResponse:
+    return _present_ticket(service.create_demo_case(request.assunto))
 
 
 @app.get("/tickets/{ticket_id}", response_model=TicketResponse)

@@ -1,13 +1,11 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { StrictMode } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { Message, SupplierSummary, Ticket } from '../../clients/client'
 import Home from './Home'
 
 const client = vi.hoisted(() => ({
   createKickoffRequest: vi.fn(),
-  createTicket: vi.fn(),
   expireConfirmations: vi.fn(),
   getTicket: vi.fn(),
   getTicketEvents: vi.fn(),
@@ -136,8 +134,7 @@ const waitingTicket = ticket({
 
 beforeEach(() => {
   vi.resetAllMocks()
-  window.history.replaceState({}, '', '/home')
-  client.createTicket.mockResolvedValue({ id: 'T-1' })
+  window.history.replaceState({}, '', '/home?ticketId=T-1')
   client.getTicketEvents.mockResolvedValue({ items: [], last_id: 0, terminal: false })
   client.listKickoffRequests.mockResolvedValue([])
 })
@@ -220,24 +217,37 @@ test('starts with the proactive message and asks for equipment identification', 
   expect(
     await screen.findByText(/foto da etiqueta.*número de série/i),
   ).toBeInTheDocument()
-  expect(client.createTicket).toHaveBeenCalledWith(
-    'Bar do João',
-    'Congela bebidas',
-    'Bebidas congelando',
-    'cooler',
-  )
   expect(screen.queryByText('Resposta transitória da ação.')).not.toBeInTheDocument()
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
 })
 
-test('creates only one startup ticket when StrictMode replays the effect', async () => {
+test('does not create a ticket when Home has no ticketId', async () => {
+  window.history.replaceState({}, '', '/home')
   client.getTicket.mockResolvedValue(ticket())
 
-  render(<StrictMode><Home /></StrictMode>)
+  render(<Home />)
 
-  await screen.findByText(/quero entender melhor/i)
-  expect(client.createTicket).toHaveBeenCalledTimes(1)
-  expect(client.getTicket.mock.calls).toEqual([['T-1']])
+  expect(await screen.findByRole('alert')).toHaveTextContent('Abra um chamado')
+  expect(client.getTicket).not.toHaveBeenCalled()
+})
+
+test('labels internal updates and keeps external messages white', async () => {
+  client.getTicket.mockResolvedValue(ticket({
+    messages: [
+      message('internal', 'Iniciou conversa com o PDV', 'internal_status'),
+      message('assistant', 'Você está próximo ao equipamento?', 'opening'),
+      message('user', 'Sim', 'text'),
+    ],
+  }))
+
+  render(<Home />)
+
+  const internalLabel = await screen.findByText('Atualização interna')
+  expect(internalLabel.closest('.chat-bubble')).toHaveClass('chat-bubble-internal')
+  expect(screen.getByText('Mensagem para o PDV').closest('.chat-bubble'))
+    .toHaveClass('chat-bubble-assistant')
+  expect(screen.getByText('Resposta do PDV').closest('.chat-bubble'))
+    .toHaveClass('chat-bubble-user')
 })
 
 test('resumes the ticket from the URL without creating another one', async () => {
@@ -247,38 +257,9 @@ test('resumes the ticket from the URL without creating another one', async () =>
   render(<Home />)
 
   expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
-  expect(client.createTicket).not.toHaveBeenCalled()
   expect(client.getTicket).toHaveBeenCalledWith('DEMO-REMOTE')
   expect(window.location.pathname).toBe('/home')
   expect(new URLSearchParams(window.location.search).get('ticketId')).toBe('DEMO-REMOTE')
-})
-
-test('stores a newly created ticket in the current URL', async () => {
-  client.getTicket.mockResolvedValue(ticket())
-
-  render(<Home />)
-
-  expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
-  expect(new URLSearchParams(window.location.search).get('ticketId')).toBe('T-1')
-})
-
-test('retries startup after a controlled create failure and recovers', async () => {
-  const user = userEvent.setup()
-  client.createTicket
-    .mockRejectedValueOnce(new Error('Não foi possível criar o ticket: erro de rede'))
-    .mockResolvedValueOnce({ id: 'T-1' })
-  client.getTicket.mockResolvedValue(ticket())
-
-  render(<Home />)
-
-  expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Não foi possível criar o ticket: erro de rede',
-  )
-  await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
-
-  expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
-  expect(client.createTicket).toHaveBeenCalledTimes(2)
-  expect(client.getTicket.mock.calls).toEqual([['T-1']])
 })
 
 test('retries a startup refresh with the existing ticket id', async () => {
@@ -295,7 +276,6 @@ test('retries a startup refresh with the existing ticket id', async () => {
   await user.click(screen.getByRole('button', { name: /tentar novamente/i }))
 
   expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
-  expect(client.createTicket).toHaveBeenCalledTimes(1)
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1']])
 })
 
@@ -384,7 +364,6 @@ test('retains the successful final-confirmation POST when the refresh fails', as
   expect(await screen.findByRole('alert')).toHaveTextContent(/obter o ticket.*rede/i)
 
   await user.click(screen.getByRole('button', { name: /tentar atualizar/i }))
-  expect(client.createTicket).toHaveBeenCalledTimes(1)
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1'], ['T-1']])
 })
 
@@ -719,7 +698,6 @@ test('retains successful serial confirmation and retries only the existing ticke
   expect(await screen.findByRole('alert')).toHaveTextContent(/obter o ticket.*503/i)
 
   await user.click(screen.getByRole('button', { name: /tentar atualizar/i }))
-  expect(client.createTicket).toHaveBeenCalledTimes(1)
   expect(client.getTicket.mock.calls).toEqual([['T-1'], ['T-1'], ['T-1']])
 })
 

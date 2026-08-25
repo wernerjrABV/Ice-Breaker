@@ -23,7 +23,7 @@ from src.models import (
     TicketEventWrite,
     TicketStatus,
 )
-from src.triage_rules import decide_triage, normalize_symptom
+from src.triage_rules import decide_initial_triage, decide_triage, normalize_symptom
 
 
 _OCR_CONFIDENCE_THRESHOLD = 0.80
@@ -245,6 +245,10 @@ def _append_assistant(
     return _ticket_or_raise(ticket_id)
 
 
+def _append_internal(ticket_id: str, message: str) -> None:
+    db.append_message(ticket_id, "internal", message, "internal_status")
+
+
 def _await_equipment_confirmation(ticket_id: str) -> dict[str, Any]:
     ticket = _ticket_or_raise(ticket_id)
     db.set_ticket_state(
@@ -276,8 +280,12 @@ def _route_supplier(
     reason: str,
     message: str,
     extra_events: Collection[TicketEventWrite] = (),
+    initial_triage: bool = False,
 ) -> dict[str, Any]:
     ticket = _ticket_or_raise(ticket_id)
+    has_initial_triage_notes = any(
+        message["role"] == "internal" for message in ticket["messages"]
+    )
     stage_event = _event(
         TicketEventCategory.STAGE_CHANGED,
         "Etapa atualizada",
@@ -285,6 +293,13 @@ def _route_supplier(
         from_stage=str(ticket["stage"]),
         to_stage=ConversationStage.FINISHED.value,
     )
+    if initial_triage:
+        _append_internal(ticket_id, "Enviado para o fornecedor")
+    elif has_initial_triage_notes:
+        _append_internal(
+            ticket_id,
+            "Não encontrou solução; atendimento seguirá com o fornecedor",
+        )
     db.set_ticket_state(
         ticket_id,
         TicketStatus.SUPPLIER,
@@ -292,6 +307,20 @@ def _route_supplier(
         priority=priority,
         reason=reason,
         events=[
+            *(
+                [
+                    _event(
+                        TicketEventCategory.INITIAL_TRIAGE_ROUTED_SUPPLIER,
+                        "Triagem inicial encaminhou ao fornecedor",
+                        "A decisão inicial encaminhou o chamado diretamente ao fornecedor.",
+                        reason=reason,
+                        priority=priority,
+                        requires_pdv_contact=False,
+                    )
+                ]
+                if initial_triage
+                else []
+            ),
             stage_event,
             *extra_events,
             _event(
@@ -305,6 +334,8 @@ def _route_supplier(
             ),
         ],
     )
+    if initial_triage:
+        return _ticket_or_raise(ticket_id)
     return _append_assistant(ticket_id, message, kind="routing")
 
 
@@ -332,6 +363,7 @@ def _agent_reply(ticket: dict[str, Any]) -> AgentConversationReply:
         "messages": [
             {"role": message["role"], "content": message["content"]}
             for message in ticket["messages"]
+            if message["role"] in {"assistant", "user"}
         ],
     }
     db.record_ticket_events(
@@ -386,6 +418,8 @@ def create_case(
     assunto: str,
     descricao_base: str,
     equipment_type: EquipmentType = EquipmentType.COOLER,
+    *,
+    initial_triage: bool = False,
 ) -> dict[str, Any]:
     ticket_id = str(uuid.uuid4())
     source_text = f"{assunto} {descricao_base}"
@@ -407,6 +441,44 @@ def create_case(
         validated_type,
         events=creation_events,
     )
+    if initial_triage:
+        decision = decide_initial_triage(assunto)
+        _append_internal(ticket_id, "Enviado ao agente para primeira triagem")
+        db.record_ticket_events(
+            ticket_id,
+            [
+                _event(
+                    TicketEventCategory.INITIAL_TRIAGE_STARTED,
+                    "Triagem inicial iniciada",
+                    "O chamado foi avaliado por regras determinísticas de abertura.",
+                    reason=decision.reason,
+                    priority=decision.priority.value,
+                    requires_pdv_contact=decision.requires_pdv_contact,
+                )
+            ],
+        )
+        if not decision.requires_pdv_contact:
+            return _route_supplier(
+                ticket_id,
+                priority=decision.priority.value,
+                reason=decision.reason,
+                message="",
+                initial_triage=True,
+            )
+        _append_internal(ticket_id, "Iniciou conversa com o PDV")
+        db.record_ticket_events(
+            ticket_id,
+            [
+                _event(
+                    TicketEventCategory.PDV_CONVERSATION_STARTED,
+                    "Conversa com o PDV iniciada",
+                    "A triagem inicial iniciou a conversa com o PDV.",
+                    reason=decision.reason,
+                    priority=decision.priority.value,
+                    requires_pdv_contact=True,
+                )
+            ],
+        )
     if risks:
         return _route_critical_risk(ticket_id, source_text)
     opening = (
@@ -415,6 +487,16 @@ def create_case(
         "você agora. Você está próximo ao equipamento?"
     )
     return _append_assistant(ticket_id, opening, kind="opening")
+
+
+def create_demo_case(subject: str) -> dict[str, Any]:
+    return create_case(
+        "PDV Demonstração",
+        subject,
+        subject,
+        EquipmentType.COOLER,
+        initial_triage=True,
+    )
 
 
 def handle_text(
@@ -488,6 +570,8 @@ def handle_text(
                 message="Como o problema continua, encaminhei o chamado ao fornecedor.",
             )
         if _is_affirmative(text):
+            if any(message["role"] == "internal" for message in ticket["messages"]):
+                _append_internal(ticket_id, "Solução encontrada pelo agente")
             db.set_ticket_state(
                 ticket_id,
                 TicketStatus.REMOTE_RESOLVED,
@@ -508,11 +592,26 @@ def handle_text(
                         reason="confirmacao_positiva_pdv",
                         saving_brl=200,
                     ),
+                    *(
+                        [
+                            _event(
+                                TicketEventCategory.REMOTE_SOLUTION_FOUND,
+                                "Solução remota encontrada",
+                                "O agente concluiu a solução remota após confirmação do PDV.",
+                                reason="confirmacao_positiva_pdv",
+                            )
+                        ]
+                        if any(
+                            message["role"] == "internal"
+                            for message in ticket["messages"]
+                        )
+                        else []
+                    ),
                 ],
             )
             return _append_assistant(
                 ticket_id,
-                "Ótimo! Registrei sua confirmação e encerrei o chamado como resolvido remotamente.",
+                "Ótimo! O problema foi corrigido e o chamado está fechado.",
                 kind="resolution",
             )
 
