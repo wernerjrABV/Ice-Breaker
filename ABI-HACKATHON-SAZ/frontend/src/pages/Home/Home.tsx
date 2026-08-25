@@ -18,7 +18,6 @@ import {
 import { AgentDashboard } from '../../components/AgentDashboard/AgentDashboard'
 import Header from '../../components/Header/Header'
 import {
-  createTicket,
   expireConfirmations,
   getTicket,
   sendMessage,
@@ -30,13 +29,6 @@ import {
 } from '../../clients/client'
 import { useTicketEvents } from '../../hooks/useTicketEvents'
 import './Home.css'
-
-const DEMO_TICKET = {
-  nomePdv: 'Bar do João',
-  assunto: 'Congela bebidas',
-  descricaoBase: 'Bebidas congelando',
-  equipmentType: 'cooler' as const,
-}
 
 const STATUS_LABELS: Record<TicketStatus, string> = {
   em_triagem: 'Em triagem',
@@ -50,13 +42,6 @@ const EXPIRY_RETRY_DELAYS_MS = [1_000, 2_000] as const
 
 function ticketIdFromUrl(): string | null {
   return new URLSearchParams(window.location.search).get('ticketId')?.trim() || null
-}
-
-function preserveTicketIdInUrl(ticketId: string) {
-  const url = new URL(window.location.href)
-  if (url.searchParams.get('ticketId') === ticketId) return
-  url.searchParams.set('ticketId', ticketId)
-  window.history.replaceState(window.history.state, '', url)
 }
 
 function controlledError(error: unknown): string {
@@ -109,7 +94,7 @@ function MessageBubble({ item }: { item: Message }) {
   )
 }
 
-function Home() {
+function TicketExperience({ requestedTicketId }: { requestedTicketId: string }) {
   const [ticket, setTicket] = useState<Ticket | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -120,8 +105,6 @@ function Home() {
   const [serial, setSerialValue] = useState('')
   const [now, setNow] = useState(() => Date.now())
   const chatEndRef = useRef<HTMLDivElement>(null)
-  const createdTicketIdRef = useRef<string | null>(ticketIdFromUrl())
-  const startupPromiseRef = useRef<Promise<Ticket> | null>(null)
   const expiryPromiseRef = useRef<{
     deadline: string
     promise: Promise<Ticket>
@@ -129,8 +112,6 @@ function Home() {
   const eventState = useTicketEvents(ticket?.id ?? null)
 
   const applyTicket = useCallback((current: Ticket) => {
-    createdTicketIdRef.current = current.id
-    preserveTicketIdInUrl(current.id)
     setTicket(current)
     if (current.equipment) {
       setModel(current.equipment.modelo)
@@ -138,33 +119,12 @@ function Home() {
     }
   }, [])
 
-  const requestStartup = useCallback((): Promise<Ticket> => {
-    if (startupPromiseRef.current) return startupPromiseRef.current
-
-    const request = (async () => {
-      let ticketId = createdTicketIdRef.current
-      if (!ticketId) {
-        const created = await createTicket(
-          DEMO_TICKET.nomePdv,
-          DEMO_TICKET.assunto,
-          DEMO_TICKET.descricaoBase,
-          DEMO_TICKET.equipmentType,
-        )
-        ticketId = created.id
-        createdTicketIdRef.current = ticketId
-      }
-      return getTicket(ticketId)
-    })()
-    startupPromiseRef.current = request
-    return request
-  }, [])
-
   useEffect(() => {
     let active = true
 
     async function startTicket() {
       try {
-        const current = await requestStartup()
+        const current = await getTicket(requestedTicketId)
         if (active) {
           applyTicket(current)
         }
@@ -177,7 +137,7 @@ function Home() {
 
     void startTicket()
     return () => { active = false }
-  }, [applyTicket, requestStartup])
+  }, [applyTicket, requestedTicketId])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView?.({ behavior: 'smooth' })
@@ -304,11 +264,10 @@ function Home() {
   }
 
   async function handleStartupRetry() {
-    startupPromiseRef.current = null
     setLoading(true)
     setError(null)
     try {
-      const current = await requestStartup()
+      const current = await getTicket(requestedTicketId)
       applyTicket(current)
     } catch (caught) {
       setError(controlledError(caught))
@@ -369,8 +328,8 @@ function Home() {
         <div className="ticket-context">
           <span className="ticket-context-icon" aria-hidden="true"><Store size={18} /></span>
           <div>
-            <strong>{ticket?.nome_pdv ?? DEMO_TICKET.nomePdv}</strong>
-            <span>{ticket?.assunto ?? DEMO_TICKET.assunto}</span>
+            <strong>{ticket?.nome_pdv ?? 'Chamado'}</strong>
+            <span>{ticket?.assunto ?? 'Carregando chamado'}</span>
           </div>
           {ticket && (
             <span className={`status-pill status-pill-${ticket.status}`}>
@@ -644,6 +603,20 @@ function Home() {
       </main>
     </div>
   )
+}
+
+function Home() {
+  const requestedTicketId = ticketIdFromUrl()
+  if (!requestedTicketId) {
+    return (
+      <main className="home home-empty" aria-label="Atendimento CoolCare">
+        <p className="chat-error" role="alert">Abra um chamado para iniciar o atendimento.</p>
+        <a className="startup-retry" href="/">Abrir um chamado</a>
+      </main>
+    )
+  }
+
+  return <TicketExperience requestedTicketId={requestedTicketId} />
 }
 
 export default Home
