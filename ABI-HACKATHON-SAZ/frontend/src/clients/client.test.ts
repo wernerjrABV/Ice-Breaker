@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest'
-import { createTicket, expireConfirmations, getTicket, getTicketEvents, sendMessage, sendPhoto, sendSerial } from './client'
+import { createDemoTicket, createTicket, expireConfirmations, getTicket, getTicketEvents, sendMessage, sendPhoto, sendSerial } from './client'
 import type { Message, Ticket } from './client'
 
 afterEach(() => vi.restoreAllMocks())
@@ -36,6 +36,20 @@ test('creates a ticket with the base call information', async () => {
         descricao_base: 'Baixa refrigeração',
         equipment_type: 'cooler',
       }),
+    }),
+  )
+})
+
+test('createDemoTicket posts only the free subject', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ id: 'T-1' }), { status: 201 }),
+  )
+  await expect(createDemoTicket('Cooler não gela')).resolves.toEqual({ id: 'T-1' })
+  expect(fetchMock).toHaveBeenCalledWith(
+    'http://127.0.0.1:8001/demo/tickets',
+    expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ assunto: 'Cooler não gela' }),
     }),
   )
 })
@@ -149,9 +163,10 @@ test('models backend messages without ids and with every emitted kind', () => {
     'routing',
     'resolution',
     'checklist',
+    'internal_status',
   ]
   const backendMessages: Message[] = kinds.map((kind) => ({
-    role: 'assistant',
+    role: kind === 'internal_status' ? 'internal' : 'assistant',
     content: 'Mensagem do backend',
     kind,
     created_at: '2026-08-21T00:00:00Z',

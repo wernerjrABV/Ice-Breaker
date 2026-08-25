@@ -42,6 +42,17 @@ def test_ticket_api_journey_and_missing_ticket(api):
     assert api.get("/tickets/missing").status_code == 404
 
 
+def test_demo_ticket_api_accepts_only_subject_and_uses_fixed_pdv(api):
+    response = api.post("/demo/tickets", json={"assunto": "Cooler não gela"})
+
+    assert response.status_code == 201
+    assert response.json()["nome_pdv"] == "PDV Demonstração"
+
+
+def test_demo_ticket_api_rejects_blank_subject(api):
+    assert api.post("/demo/tickets", json={"assunto": "  "}).status_code == 422
+
+
 @pytest.mark.parametrize(
     ("equipment_type", "assunto"),
     [

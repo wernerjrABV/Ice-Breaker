@@ -18,9 +18,9 @@ export type ConversationStage =
 
 export interface Message {
   id?: number
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'internal'
   content: string
-  kind: 'text' | 'opening' | 'conversation' | 'identification' | 'routing' | 'resolution' | 'checklist'
+  kind: 'text' | 'opening' | 'conversation' | 'identification' | 'routing' | 'resolution' | 'checklist' | 'internal_status'
   created_at: string
 }
 
@@ -144,6 +144,16 @@ export async function createTicket(
       descricao_base: descricaoBase,
       equipment_type: equipmentType,
     }),
+  }, 'Não foi possível criar o ticket')
+
+  return readResponse(response, 'Não foi possível criar o ticket')
+}
+
+export async function createDemoTicket(assunto: string): Promise<{ id: string }> {
+  const response = await request(`${API_BASE_URL}/demo/tickets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assunto }),
   }, 'Não foi possível criar o ticket')
 
   return readResponse(response, 'Não foi possível criar o ticket')
