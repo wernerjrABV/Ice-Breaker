@@ -45,6 +45,31 @@ def test_demo_case_routes_risk_without_customer_message():
     ]
 
 
+def test_demo_case_routes_damaged_cable_risk_urgently_with_internal_updates():
+    ticket = service.create_demo_case("Cooler com cabo está danificado")
+    history = db.list_ticket_events(str(ticket["id"]))
+
+    assert ticket["status"] == TicketStatus.SUPPLIER.value
+    assert ticket["priority"] == Priority.URGENT.value
+    assert [message["content"] for message in ticket["messages"]] == [
+        "Enviado ao agente para primeira triagem",
+        "Enviado para o fornecedor",
+    ]
+    assert [event["category"] for event in history][-2:] == [
+        "stage_changed",
+        "supplier_routed",
+    ]
+    assert any(
+        event["category"] == "initial_triage_routed_supplier"
+        and event["metadata"] == {
+            "reason": "Risco crítico identificado.",
+            "priority": "urgente",
+            "requires_pdv_contact": False,
+        }
+        for event in history
+    )
+
+
 @pytest.mark.parametrize(
     ("subject", "requires_pdv_contact", "priority"),
     [

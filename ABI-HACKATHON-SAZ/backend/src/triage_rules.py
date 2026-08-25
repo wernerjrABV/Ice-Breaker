@@ -19,6 +19,7 @@ _INITIAL_RISK_PHRASES = (
     "vazamento",
     "vazando",
     "cabo danificado",
+    "cabo esta danificado",
 )
 _INITIAL_SUPPLIER_PHRASES = ("fornecedor", "visita", "troca")
 
