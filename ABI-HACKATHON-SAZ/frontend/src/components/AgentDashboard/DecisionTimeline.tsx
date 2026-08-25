@@ -1,15 +1,22 @@
 import type { TicketEvent } from '../../clients/client'
 import { eventStateLabels, formatEventTime } from './eventPresentation'
 
-export function DecisionTimeline({ events }: { events: TicketEvent[] }) {
+export function DecisionTimeline({
+  events,
+  error,
+}: {
+  events: TicketEvent[]
+  error?: string | null
+}) {
   const chronologicalEvents = [...events].sort((left, right) => left.id - right.id)
 
   return (
-    <section className="agent-panel agent-timeline-panel" aria-labelledby="decision-timeline-title">
+    <section className="agent-panel agent-timeline-panel" aria-label="Histórico completo">
       <div className="agent-panel-heading">
         <p>Histórico completo</p>
         <h2 id="decision-timeline-title">Linha do tempo</h2>
       </div>
+      {error && <p className="agent-timeline-error" role="alert">{error}</p>}
       <ol className="agent-timeline" aria-label="Linha do tempo do agente">
         {chronologicalEvents.map((item) => (
           <li key={item.id} className={`agent-timeline-item agent-event-${item.state}`}>

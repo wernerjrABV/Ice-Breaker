@@ -638,6 +638,7 @@ function Home() {
           ticket={ticket}
           events={eventState.events}
           connection={eventState.connection}
+          error={eventState.error}
         />
       )}
       </main>

@@ -63,6 +63,22 @@ test('renders decision focus, safe signals, and chronological events', () => {
   expect(screen.getByText('R$ 200')).toBeInTheDocument()
 })
 
+test('groups the full history with the newest event above safe signals', () => {
+  const { container } = render(
+    <AgentDashboard ticket={waitingTicket} events={[event(2), event(1)]} connection="active" />,
+  )
+
+  const grid = container.querySelector('.agent-dashboard-grid')
+  const timeline = screen.getByRole('region', { name: 'Histórico completo' })
+  const focus = screen.getByRole('region', { name: 'Decisão em foco' })
+  const signals = screen.getByRole('region', { name: 'Base da decisão' })
+
+  expect(grid).toContainElement(timeline)
+  expect(grid).toContainElement(focus)
+  expect(grid).toContainElement(signals)
+  expect(Array.from(grid?.children ?? [])).toEqual([timeline, focus, signals])
+})
+
 test('keeps known event copy for an unknown future category', () => {
   const future = { ...event(3), category: 'future_event' as TicketEvent['category'], title: 'Nova etapa', description: 'Evento compat\u00edvel.' }
   render(<AgentDashboard ticket={waitingTicket} events={[future]} connection="active" />)
@@ -75,6 +91,23 @@ test('shows reconnecting without removing the last events', () => {
   render(<AgentDashboard ticket={waitingTicket} events={[event(1)]} connection="reconnecting" />)
   expect(screen.getByText('Reconectando')).toBeInTheDocument()
   expect(screen.getAllByText('Chamado recebido')).toHaveLength(2)
+})
+
+test('shows an availability error in the complete history without hiding recorded events', () => {
+  render(
+    <AgentDashboard
+      ticket={waitingTicket}
+      events={[event(1)]}
+      connection="reconnecting"
+      error="Acompanhamento temporariamente indisponível."
+    />,
+  )
+
+  const timeline = screen.getByRole('region', { name: 'Histórico completo' })
+  expect(within(timeline).getByRole('alert')).toHaveTextContent(
+    'Acompanhamento temporariamente indisponível.',
+  )
+  expect(within(timeline).getByText('Chamado recebido')).toBeInTheDocument()
 })
 
 test('shows a Portuguese state badge on every semantic timeline item', () => {

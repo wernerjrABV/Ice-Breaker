@@ -18,10 +18,12 @@ export function AgentDashboard({
   ticket,
   events,
   connection,
+  error,
 }: {
   ticket: Ticket
   events: TicketEvent[]
   connection: EventConnection
+  error?: string | null
 }) {
   return (
     <aside className="agent-dashboard" role="region" aria-label="Inteligência do agente">
@@ -33,13 +35,11 @@ export function AgentDashboard({
       {events.length === 0 ? (
         <p className="agent-empty">Preparando acompanhamento do agente...</p>
       ) : (
-        <>
+        <div className="agent-dashboard-grid">
+          <DecisionTimeline events={events} error={error} />
           <DecisionFocus events={events} />
-          <div className="agent-dashboard-grid">
-            <DecisionTimeline events={events} />
-            <DecisionSignals ticket={ticket} events={events} />
-          </div>
-        </>
+          <DecisionSignals ticket={ticket} events={events} />
+        </div>
       )}
     </aside>
   )

@@ -1,4 +1,7 @@
 .agent-dashboard {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -70,13 +73,17 @@
 
 .agent-dashboard-grid {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: minmax(0, 1.15fr) minmax(230px, .85fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
+  min-height: 0;
   padding: 0 18px 18px;
 }
 
 .agent-panel { padding: 15px; }
-.agent-focus-panel { margin: 0 18px 12px; }
+.agent-timeline-panel { display: flex; grid-row: span 2; min-height: 0; flex-direction: column; }
+.agent-focus-panel { margin: 0; }
 .agent-panel-heading p { margin: 0; font-size: 0.74rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
 .agent-panel-heading h2 { margin: 0; font-size: 1rem; }
 .agent-focus-event { display: grid; gap: 5px; margin-top: 12px; padding-left: 12px; border-left: 3px solid var(--green-600); }
@@ -87,7 +94,8 @@
 .agent-focus-title-row strong { font-size: 0.92rem; }
 .agent-focus-event p { margin: 0; color: var(--muted); font-size: 0.84rem; }
 .agent-focus-event time { color: var(--muted); font-size: 0.74rem; }
-.agent-timeline { display: grid; gap: 13px; padding: 0; margin: 15px 0 0; list-style: none; }
+.agent-timeline-error { margin: 12px 0 0; padding: 8px 10px; border-radius: 8px; color: var(--danger); background: var(--danger-bg); font-size: 0.8rem; }
+.agent-timeline { display: grid; flex: 1 1 auto; gap: 13px; min-height: 0; padding: 0 4px 0 0; margin: 15px 0 0; overflow-y: auto; list-style: none; scrollbar-color: rgba(23, 107, 76, 0.35) transparent; scrollbar-width: thin; }
 .agent-timeline-item { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 9px; }
 .agent-event-dot { margin-top: 6px; background: var(--green-600); box-shadow: 0 0 0 4px var(--green-100); }
 .agent-event-waiting .agent-event-dot, .agent-event-warning .agent-event-dot { background: var(--warning); box-shadow: 0 0 0 4px var(--warning-bg); }
@@ -111,7 +119,8 @@
 
 @media (max-width: 900px) {
   .agent-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .agent-dashboard-grid { grid-template-columns: 1fr; }
+  .agent-dashboard-grid { grid-template-columns: 1fr; grid-template-rows: none; }
+  .agent-timeline-panel { grid-row: auto; min-height: 260px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
