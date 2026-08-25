@@ -6,6 +6,15 @@
     linear-gradient(145deg, #f4f8f6 0%, #e6f0ec 100%);
 }
 
+.case-experience {
+  display: grid;
+  grid-template-columns: minmax(360px, 520px) minmax(520px, 1fr);
+  gap: 20px;
+  width: min(1440px, 100%);
+  min-height: calc(100svh - 56px);
+  margin: 0 auto;
+}
+
 .phone-shell {
   display: flex;
   flex-direction: column;
@@ -13,12 +22,25 @@
   max-width: 520px;
   height: calc(100svh - 56px);
   min-height: 620px;
-  margin: 0 auto;
+  margin: 0;
   overflow: hidden;
   border: 1px solid rgba(24, 91, 67, 0.18);
   border-radius: 30px;
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+@media (max-width: 1040px) {
+  .case-experience {
+    grid-template-columns: 1fr;
+  }
+
+  .phone-shell,
+  .agent-dashboard {
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+  }
 }
 
 .phone-shell .header {

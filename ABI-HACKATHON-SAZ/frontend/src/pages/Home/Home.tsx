@@ -15,6 +15,7 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from 'react'
+import { AgentDashboard } from '../../components/AgentDashboard/AgentDashboard'
 import Header from '../../components/Header/Header'
 import {
   createTicket,
@@ -27,6 +28,7 @@ import {
   type Ticket,
   type TicketStatus,
 } from '../../clients/client'
+import { useTicketEvents } from '../../hooks/useTicketEvents'
 import './Home.css'
 
 const DEMO_TICKET = {
@@ -113,6 +115,7 @@ function Home() {
     deadline: string
     promise: Promise<Ticket>
   } | null>(null)
+  const eventState = useTicketEvents(ticket?.id ?? null)
 
   const applyTicket = useCallback((current: Ticket) => {
     setTicket(current)
@@ -346,6 +349,7 @@ function Home() {
 
   return (
     <div className="home">
+      <main className="case-experience" aria-label="Experiência do chamado">
       <section className="phone-shell phone-shell-flex" aria-label="Atendimento CoolCare">
         <Header />
 
@@ -612,6 +616,14 @@ function Home() {
           </footer>
         )}
       </section>
+      {ticket && (
+        <AgentDashboard
+          ticket={ticket}
+          events={eventState.events}
+          connection={eventState.connection}
+        />
+      )}
+      </main>
     </div>
   )
 }
