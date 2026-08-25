@@ -63,6 +63,25 @@ test.each([
   expect(eventCategoryLabels[category]).toBe(label)
 })
 
+test('uses the mapped label for new categories while preserving unknown event titles', () => {
+  const initialTriage = {
+    ...event(2),
+    category: 'initial_triage_started' as const,
+    title: 'Título técnico do backend',
+  }
+  const future = {
+    ...event(1),
+    category: 'future_event' as TicketEvent['category'],
+    title: 'Título futuro do backend',
+  }
+
+  render(<AgentDashboard ticket={waitingTicket} events={[initialTriage, future]} connection="active" />)
+
+  expect(screen.getAllByText('Triagem inicial iniciada')).toHaveLength(2)
+  expect(screen.getByText('Título futuro do backend')).toBeInTheDocument()
+  expect(screen.queryByText('Título técnico do backend')).not.toBeInTheDocument()
+})
+
 test('renders decision focus, safe signals, and chronological events', () => {
   render(<AgentDashboard ticket={waitingTicket} events={[event(2), event(1)]} connection="active" />)
 

@@ -20,3 +20,9 @@
 - `backend/uv run pytest -v --basetemp .pytest-task4-temp`: 142 passed, 1 warning de depreciação externa do Starlette.
 
 O comando padrão de pytest não pôde criar `%LOCALAPPDATA%\\Temp\\pytest-of-werner.junior` (`WinError 5`); a base temporária isolada preservou `backend/data/backend.db`.
+
+## Fix round 1
+
+- Red: o novo teste de componente falhou porque Timeline e Focus exibiam o título técnico.
+- Green: Timeline e Focus usam os rótulos somente para as quatro categorias novas e preservam `item.title` para categorias desconhecidas.
+- Verificação: `npm test -- AgentDashboard.test.tsx` (17 passed) e `npm test` (63 passed).

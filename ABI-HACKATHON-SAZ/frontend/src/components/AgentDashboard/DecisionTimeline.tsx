@@ -1,5 +1,5 @@
 import type { TicketEvent } from '../../clients/client'
-import { eventStateLabels, formatEventTime } from './eventPresentation'
+import { eventCategoryLabels, eventStateLabels, formatEventTime } from './eventPresentation'
 
 export function DecisionTimeline({
   events,
@@ -23,7 +23,7 @@ export function DecisionTimeline({
             <span className="agent-event-dot" aria-hidden="true" />
             <div>
               <div className="agent-event-title-row">
-                <strong>{item.title}</strong>
+                <strong>{eventCategoryLabels[item.category] ?? item.title}</strong>
                 <time dateTime={item.created_at}>{formatEventTime(item.created_at)}</time>
               </div>
               <span className={`agent-event-state agent-event-state-${item.state}`}>
