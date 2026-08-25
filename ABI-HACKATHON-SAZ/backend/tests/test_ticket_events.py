@@ -81,6 +81,37 @@ def test_ocr_event_exposes_only_safe_label_fields(confidence, manual_required):
     }
 
 
+def test_manual_correction_is_recorded_as_the_confirmed_equipment():
+    ticket = service.create_case("PDV", "Não gela", "Cooler não refrigera")
+    ticket_id = str(ticket["id"])
+    service.handle_text(ticket_id, "sim")
+    service.handle_label(
+        ticket_id,
+        {"modelo": "OCR-ANTIGO", "numero_serie": "", "confianca": 0.42},
+        "etiqueta.jpg",
+    )
+    service.handle_serial(ticket_id, "CX-400", "BR-CORRETO")
+
+    confirmed = service.handle_text(ticket_id, "sim, os dados estão corretos")
+
+    confirmation = next(
+        item
+        for item in db.list_ticket_events(ticket_id)
+        if item["category"] == "equipment_confirmed"
+    )
+    assert confirmed["equipment"] == {
+        "modelo": "CX-400",
+        "numero_serie": "BR-CORRETO",
+        "confianca": 1.0,
+        "image_name": "etiqueta.jpg",
+    }
+    assert confirmation["metadata"] == {
+        "model": "CX-400",
+        "serial": "BR-CORRETO",
+        "confidence": 1.0,
+    }
+
+
 def test_confirmation_expiry_records_zero_saving():
     ticket = service.create_case("PDV", "Congela bebidas", "Bebidas congelando")
     ticket_id = str(ticket["id"])

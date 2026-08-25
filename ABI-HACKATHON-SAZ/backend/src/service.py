@@ -539,6 +539,11 @@ def handle_text(
                 kind="identification",
             )
         if _is_affirmative(text):
+            equipment = ticket["equipment"]
+            if equipment is None:
+                raise InvalidTransitionError(
+                    "A confirmação exige identificação do equipamento."
+                )
             db.record_ticket_events(
                 ticket_id,
                 [
@@ -546,6 +551,9 @@ def handle_text(
                         TicketEventCategory.EQUIPMENT_CONFIRMED,
                         "Equipamento confirmado",
                         "O PDV confirmou os dados de identificação do equipamento.",
+                        model=str(equipment["modelo"]),
+                        serial=str(equipment["numero_serie"]),
+                        confidence=float(equipment["confianca"]),
                     )
                 ],
             )

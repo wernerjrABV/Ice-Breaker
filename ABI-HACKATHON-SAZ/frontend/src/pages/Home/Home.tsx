@@ -48,6 +48,17 @@ const STATUS_LABELS: Record<TicketStatus, string> = {
 const MAX_EXPIRY_ATTEMPTS = 3
 const EXPIRY_RETRY_DELAYS_MS = [1_000, 2_000] as const
 
+function ticketIdFromUrl(): string | null {
+  return new URLSearchParams(window.location.search).get('ticketId')?.trim() || null
+}
+
+function preserveTicketIdInUrl(ticketId: string) {
+  const url = new URL(window.location.href)
+  if (url.searchParams.get('ticketId') === ticketId) return
+  url.searchParams.set('ticketId', ticketId)
+  window.history.replaceState(window.history.state, '', url)
+}
+
 function controlledError(error: unknown): string {
   if (
     error instanceof Error
@@ -109,7 +120,7 @@ function Home() {
   const [serial, setSerialValue] = useState('')
   const [now, setNow] = useState(() => Date.now())
   const chatEndRef = useRef<HTMLDivElement>(null)
-  const createdTicketIdRef = useRef<string | null>(null)
+  const createdTicketIdRef = useRef<string | null>(ticketIdFromUrl())
   const startupPromiseRef = useRef<Promise<Ticket> | null>(null)
   const expiryPromiseRef = useRef<{
     deadline: string
@@ -118,6 +129,8 @@ function Home() {
   const eventState = useTicketEvents(ticket?.id ?? null)
 
   const applyTicket = useCallback((current: Ticket) => {
+    createdTicketIdRef.current = current.id
+    preserveTicketIdInUrl(current.id)
     setTicket(current)
     if (current.equipment) {
       setModel(current.equipment.modelo)

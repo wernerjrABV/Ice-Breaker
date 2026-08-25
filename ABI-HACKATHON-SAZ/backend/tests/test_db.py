@@ -15,12 +15,17 @@ from src.models import (
 
 
 def event(category=TicketEventCategory.TICKET_CREATED, title="Chamado recebido"):
+    metadata = (
+        {"detected": False, "risk_flags": []}
+        if category is TicketEventCategory.RISK_EVALUATED
+        else {"equipment_type": "cooler"}
+    )
     return TicketEventWrite(
         category=category,
         title=title,
         description="Evento público e auditável.",
         state=TicketEventState.COMPLETED,
-        metadata={"equipment_type": "cooler"},
+        metadata=metadata,
     )
 
 
@@ -153,23 +158,12 @@ def test_ticket_events_are_ordered_and_filtered_incrementally(tmp_path, monkeypa
     remaining = db.list_ticket_events("T-EVENT", after=int(first["id"]), limit=100)
 
     assert [item["category"] for item in remaining] == ["risk_evaluated"]
-    assert remaining[0]["metadata"] == {"equipment_type": "cooler"}
+    assert remaining[0]["metadata"] == {"detected": False, "risk_flags": []}
     assert remaining[0]["created_at"].endswith("+00:00")
 
 
-@pytest.mark.parametrize(
-    "metadata_key",
-    [
-        "credentials",
-        "user_message",
-        "model_response",
-        "traceback",
-        "system_prompt",
-        "chain_of_thought",
-        "RAW-RESPONSE",
-    ],
-)
-def test_ticket_event_metadata_rejects_prohibited_key_variants(metadata_key):
+@pytest.mark.parametrize("metadata_key", ["content", "dialogue", "input"])
+def test_ticket_event_metadata_rejects_unknown_content_keys(metadata_key):
     with pytest.raises(ValueError):
         TicketEventWrite(
             category=TicketEventCategory.AGENT_INTERPRETED,
@@ -180,39 +174,75 @@ def test_ticket_event_metadata_rejects_prohibited_key_variants(metadata_key):
         )
 
 
+def test_ticket_event_metadata_rejects_an_approved_key_on_the_wrong_category():
+    with pytest.raises(ValueError):
+        TicketEventWrite(
+            category=TicketEventCategory.TICKET_CREATED,
+            title="Chamado recebido",
+            description="Evento público e auditável.",
+            state=TicketEventState.COMPLETED,
+            metadata={"reason": "wrong category"},
+        )
+
+
 @pytest.mark.parametrize(
-    "metadata_key",
+    ("category", "metadata"),
     [
-        "equipment_type",
-        "detected",
-        "risk_flags",
-        "from_stage",
-        "to_stage",
-        "stage",
-        "reply_key",
-        "symptom",
-        "model",
-        "serial",
-        "confidence",
-        "manual_required",
-        "outcome",
-        "priority",
-        "reason",
-        "actions",
-        "deadline",
-        "saving_brl",
+        (TicketEventCategory.TICKET_CREATED, {"equipment_type": "cooler"}),
+        (TicketEventCategory.SCOPE_VALIDATED, {"equipment_type": "cooler"}),
+        (TicketEventCategory.RISK_EVALUATED, {"detected": False, "risk_flags": []}),
+        (
+            TicketEventCategory.STAGE_CHANGED,
+            {"from_stage": "aguardando_proximidade", "to_stage": "aguardando_identificacao"},
+        ),
+        (TicketEventCategory.AGENT_REQUESTED, {"stage": "aguardando_proximidade"}),
+        (
+            TicketEventCategory.AGENT_INTERPRETED,
+            {"reply_key": "solicitar_identificacao", "symptom": "nao_gela", "risk_flags": []},
+        ),
+        (
+            TicketEventCategory.OCR_COMPLETED,
+            {"model": "CX-400", "serial": "BR-1", "confidence": 0.79, "manual_required": True},
+        ),
+        (
+            TicketEventCategory.EQUIPMENT_CONFIRMED,
+            {"model": "CX-400", "serial": "BR-1", "confidence": 1.0},
+        ),
+        (
+            TicketEventCategory.TRIAGE_DECISION,
+            {
+                "symptom": "congela_bebidas",
+                "outcome": "checklist_remoto",
+                "priority": "normal",
+                "reason": "checklist_aplicavel",
+            },
+        ),
+        (TicketEventCategory.CHECKLIST_SENT, {"actions": ["Verifique a ventilação."]}),
+        (TicketEventCategory.CONFIRMATION_WAITING, {"deadline": "2026-08-25T17:32:09+00:00"}),
+        (
+            TicketEventCategory.TICKET_RESOLVED,
+            {"reason": "confirmacao_positiva_pdv", "saving_brl": 200},
+        ),
+        (
+            TicketEventCategory.SUPPLIER_ROUTED,
+            {"reason": "risco_detectado", "priority": "urgente", "saving_brl": 0},
+        ),
+        (
+            TicketEventCategory.CONFIRMATION_EXPIRED,
+            {"reason": "sem_confirmacao_pdv", "priority": "normal"},
+        ),
     ],
 )
-def test_ticket_event_metadata_accepts_approved_keys(metadata_key):
+def test_ticket_event_metadata_accepts_every_service_shape(category, metadata):
     event = TicketEventWrite(
-        category=TicketEventCategory.AGENT_INTERPRETED,
+        category=category,
         title="Agente interpretou",
         description="Resposta validada.",
         state=TicketEventState.COMPLETED,
-        metadata={metadata_key: "allowed"},
+        metadata=metadata,
     )
 
-    assert event.metadata == {metadata_key: "allowed"}
+    assert event.metadata == metadata
 
 
 def test_ticket_event_metadata_rejects_nested_or_sensitive_values():

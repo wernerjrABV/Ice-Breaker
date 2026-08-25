@@ -12,13 +12,15 @@ const signalLabels: Record<SignalKey, string> = {
 }
 
 function safeSignal(value: TicketEventMetadataValue | undefined): string | undefined {
-  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
-    ? String(value)
-    : undefined
+  if (typeof value === 'string') return value.trim() || undefined
+  return typeof value === 'number' || typeof value === 'boolean' ? String(value) : undefined
 }
 
 function decisionSignals(ticket: Ticket, events: TicketEvent[]): Partial<Record<SignalKey, string>> {
-  const signals: Partial<Record<SignalKey, string>> = {}
+  const signals: Partial<Record<SignalKey, string>> = {
+    model: safeSignal(ticket.equipment?.modelo),
+    serial: safeSignal(ticket.equipment?.numero_serie),
+  }
   const keys: SignalKey[] = ['symptom', 'detected', 'model', 'serial', 'outcome', 'priority']
 
   for (const item of [...events].sort((left, right) => right.id - left.id)) {
@@ -28,10 +30,8 @@ function decisionSignals(ticket: Ticket, events: TicketEvent[]): Partial<Record<
       if (value !== undefined) signals[key] = value
     }
   }
-  signals.model ??= ticket.equipment?.modelo
-  signals.serial ??= ticket.equipment?.numero_serie
-  signals.outcome ??= ticket.outcome_reason
-  signals.priority ??= ticket.priority
+  signals.outcome ??= safeSignal(ticket.outcome_reason)
+  signals.priority ??= safeSignal(ticket.priority)
   return signals
 }
 

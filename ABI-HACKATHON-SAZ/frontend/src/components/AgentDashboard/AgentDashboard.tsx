@@ -1,6 +1,7 @@
 import type { Ticket, TicketEvent } from '../../clients/client'
 import type { EventConnection } from '../../hooks/useTicketEvents'
 import { AgentMetrics } from './AgentMetrics'
+import { DecisionFocus } from './DecisionFocus'
 import { DecisionSignals } from './DecisionSignals'
 import { DecisionTimeline } from './DecisionTimeline'
 import './AgentDashboard.css'
@@ -32,10 +33,13 @@ export function AgentDashboard({
       {events.length === 0 ? (
         <p className="agent-empty">Preparando acompanhamento do agente...</p>
       ) : (
-        <div className="agent-dashboard-grid">
-          <DecisionTimeline events={events} />
-          <DecisionSignals ticket={ticket} events={events} />
-        </div>
+        <>
+          <DecisionFocus events={events} />
+          <div className="agent-dashboard-grid">
+            <DecisionTimeline events={events} />
+            <DecisionSignals ticket={ticket} events={events} />
+          </div>
+        </>
       )}
     </aside>
   )

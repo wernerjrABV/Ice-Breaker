@@ -136,6 +136,7 @@ const waitingTicket = ticket({
 
 beforeEach(() => {
   vi.resetAllMocks()
+  window.history.replaceState({}, '', '/home')
   client.createTicket.mockResolvedValue({ id: 'T-1' })
   client.getTicketEvents.mockResolvedValue({ items: [], last_id: 0, terminal: false })
   client.listKickoffRequests.mockResolvedValue([])
@@ -169,7 +170,8 @@ test('shows the live chat beside the agent dashboard for the same ticket', async
   expect(experience).toHaveClass('case-experience')
   expect(screen.getByLabelText('Atendimento CoolCare')).toBeInTheDocument()
   expect(screen.getByRole('region', { name: 'Inteligência do agente' })).toBeInTheDocument()
-  expect(await screen.findByText('Chamado recebido')).toBeInTheDocument()
+  expect(within(await screen.findByRole('list', { name: 'Linha do tempo do agente' }))
+    .getByText('Chamado recebido')).toBeInTheDocument()
   expect(client.getTicketEvents).toHaveBeenCalledWith('T-1', 0, 100)
 })
 
@@ -236,6 +238,28 @@ test('creates only one startup ticket when StrictMode replays the effect', async
   await screen.findByText(/quero entender melhor/i)
   expect(client.createTicket).toHaveBeenCalledTimes(1)
   expect(client.getTicket.mock.calls).toEqual([['T-1']])
+})
+
+test('resumes the ticket from the URL without creating another one', async () => {
+  window.history.replaceState({}, '', '/home?ticketId=DEMO-REMOTE')
+  client.getTicket.mockResolvedValue(ticket({ id: 'DEMO-REMOTE' }))
+
+  render(<Home />)
+
+  expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
+  expect(client.createTicket).not.toHaveBeenCalled()
+  expect(client.getTicket).toHaveBeenCalledWith('DEMO-REMOTE')
+  expect(window.location.pathname).toBe('/home')
+  expect(new URLSearchParams(window.location.search).get('ticketId')).toBe('DEMO-REMOTE')
+})
+
+test('stores a newly created ticket in the current URL', async () => {
+  client.getTicket.mockResolvedValue(ticket())
+
+  render(<Home />)
+
+  expect(await screen.findByText(/quero entender melhor/i)).toBeInTheDocument()
+  expect(new URLSearchParams(window.location.search).get('ticketId')).toBe('T-1')
 })
 
 test('retries startup after a controlled create failure and recovers', async () => {

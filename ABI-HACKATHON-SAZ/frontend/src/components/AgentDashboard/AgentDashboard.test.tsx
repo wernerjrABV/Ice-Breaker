@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
 import type { Ticket, TicketEvent } from '../../clients/client'
 import { AgentDashboard } from './AgentDashboard'
@@ -67,23 +67,74 @@ test('keeps known event copy for an unknown future category', () => {
   const future = { ...event(3), category: 'future_event' as TicketEvent['category'], title: 'Nova etapa', description: 'Evento compat\u00edvel.' }
   render(<AgentDashboard ticket={waitingTicket} events={[future]} connection="active" />)
 
-  expect(screen.getByText('Nova etapa')).toBeInTheDocument()
-  expect(screen.getByText('Evento compat\u00edvel.')).toBeInTheDocument()
+  expect(screen.getAllByText('Nova etapa')).toHaveLength(2)
+  expect(screen.getAllByText('Evento compat\u00edvel.')).toHaveLength(2)
 })
 
 test('shows reconnecting without removing the last events', () => {
   render(<AgentDashboard ticket={waitingTicket} events={[event(1)]} connection="reconnecting" />)
   expect(screen.getByText('Reconectando')).toBeInTheDocument()
-  expect(screen.getByText('Chamado recebido')).toBeInTheDocument()
+  expect(screen.getAllByText('Chamado recebido')).toHaveLength(2)
 })
 
-test('uses newest safe event values before ticket fallbacks', () => {
+test('shows a Portuguese state badge on every semantic timeline item', () => {
+  const states = [
+    ['completed', 'Concluído'],
+    ['active', 'Em andamento'],
+    ['waiting', 'Aguardando'],
+    ['warning', 'Atenção'],
+    ['failed', 'Falhou'],
+  ] as const
+  const events = states.map(([state], index) => ({
+    ...event(index + 1),
+    state,
+    title: `Evento ${index + 1}`,
+  }))
+
+  render(<AgentDashboard ticket={waitingTicket} events={events} connection="active" />)
+
+  const items = within(screen.getByRole('list', { name: 'Linha do tempo do agente' }))
+    .getAllByRole('listitem')
+  expect(items).toHaveLength(states.length)
+  states.forEach(([, label], index) => {
+    expect(within(items[index]).getByText(label)).toBeVisible()
+  })
+})
+
+test('renders a separate decision focus from the highest event id', () => {
+  const newest = {
+    ...event(7),
+    title: 'Evento mais recente',
+    description: 'Esta é a decisão atual.',
+    state: 'warning' as const,
+  }
+
+  render(
+    <AgentDashboard
+      ticket={waitingTicket}
+      events={[newest, event(2), event(4)]}
+      connection="active"
+    />,
+  )
+
+  const focus = screen.getByRole('region', { name: 'Decisão em foco' })
+  expect(within(focus).getByText('Evento mais recente', { selector: 'strong' }))
+    .toBeInTheDocument()
+  expect(within(focus).getByText('Esta é a decisão atual.')).toBeInTheDocument()
+  expect(within(focus).getByText('Atenção')).toBeVisible()
+  expect(focus.querySelector('time')).toHaveAttribute('datetime', newest.created_at)
+  expect(within(screen.getByRole('list', { name: 'Linha do tempo do agente' }))
+    .getAllByRole('listitem')).toHaveLength(3)
+})
+
+test('uses corrected ticket equipment and ignores empty event signals', () => {
   const latest = {
     ...event(4),
     metadata: {
+      symptom: '',
       detected: true,
-      model: 'CX-900',
-      serial: 42,
+      model: 'OCR-ANTIGO',
+      serial: '',
       outcome: 'checklist_enviado',
       priority: 'urgente',
       unsafe: ['não exibir'],
@@ -91,9 +142,10 @@ test('uses newest safe event values before ticket fallbacks', () => {
   }
   render(<AgentDashboard ticket={waitingTicket} events={[event(1), latest]} connection="active" />)
 
-  expect(screen.getByText('CX-900')).toBeInTheDocument()
-  expect(screen.getByText('42')).toBeInTheDocument()
+  expect(screen.getByText('CX-400')).toBeInTheDocument()
+  expect(screen.getByText('BR-DEMO-001')).toBeInTheDocument()
+  expect(screen.getByText('congela_bebidas')).toBeInTheDocument()
   expect(screen.getByText('urgente')).toBeInTheDocument()
-  expect(screen.queryByText('BR-DEMO-001')).not.toBeInTheDocument()
+  expect(screen.queryByText('OCR-ANTIGO')).not.toBeInTheDocument()
   expect(screen.queryByText('não exibir')).not.toBeInTheDocument()
 })

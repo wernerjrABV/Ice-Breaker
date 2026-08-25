@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TicketStatus(str, Enum):
@@ -166,6 +166,33 @@ class TicketEventState(str, Enum):
 
 TicketEventMetadataValue: TypeAlias = str | int | float | bool | None | list[str]
 
+TICKET_EVENT_METADATA_KEYS: dict[TicketEventCategory, frozenset[str]] = {
+    TicketEventCategory.TICKET_CREATED: frozenset({"equipment_type"}),
+    TicketEventCategory.SCOPE_VALIDATED: frozenset({"equipment_type"}),
+    TicketEventCategory.RISK_EVALUATED: frozenset({"detected", "risk_flags"}),
+    TicketEventCategory.STAGE_CHANGED: frozenset({"from_stage", "to_stage"}),
+    TicketEventCategory.AGENT_REQUESTED: frozenset({"stage"}),
+    TicketEventCategory.AGENT_INTERPRETED: frozenset(
+        {"reply_key", "symptom", "risk_flags"}
+    ),
+    TicketEventCategory.OCR_COMPLETED: frozenset(
+        {"model", "serial", "confidence", "manual_required"}
+    ),
+    TicketEventCategory.EQUIPMENT_CONFIRMED: frozenset(
+        {"model", "serial", "confidence"}
+    ),
+    TicketEventCategory.TRIAGE_DECISION: frozenset(
+        {"symptom", "outcome", "priority", "reason"}
+    ),
+    TicketEventCategory.CHECKLIST_SENT: frozenset({"actions"}),
+    TicketEventCategory.CONFIRMATION_WAITING: frozenset({"deadline"}),
+    TicketEventCategory.TICKET_RESOLVED: frozenset({"reason", "saving_brl"}),
+    TicketEventCategory.SUPPLIER_ROUTED: frozenset(
+        {"reason", "priority", "saving_brl"}
+    ),
+    TicketEventCategory.CONFIRMATION_EXPIRED: frozenset({"reason", "priority"}),
+}
+
 
 class TicketEventWrite(BaseModel):
     category: TicketEventCategory
@@ -174,48 +201,17 @@ class TicketEventWrite(BaseModel):
     state: TicketEventState
     metadata: dict[str, TicketEventMetadataValue] = Field(default_factory=dict)
 
-    @field_validator("metadata")
-    @classmethod
-    def validate_metadata(
-        cls,
-        metadata: dict[str, TicketEventMetadataValue],
-    ) -> dict[str, TicketEventMetadataValue]:
-        forbidden_categories = (
-            "prompt",
-            "credential",
-            "password",
-            "secret",
-            "apikey",
-            "token",
-            "authorization",
-            "message",
-            "rawresponse",
-            "modelresponse",
-            "response",
-            "stacktrace",
-            "traceback",
-            "errortrace",
-            "chainofthought",
-            "thought",
-            "reasoning",
-            "cot",
-        )
-        normalized_keys = (
-            "".join(character for character in key.casefold() if character.isalnum())
-            for key in metadata
-        )
-        if any(
-            category in normalized_key
-            for normalized_key in normalized_keys
-            for category in forbidden_categories
-        ):
-            raise ValueError("Metadado sensível não é permitido em eventos.")
+    @model_validator(mode="after")
+    def validate_metadata(self) -> "TicketEventWrite":
+        unknown_keys = set(self.metadata) - TICKET_EVENT_METADATA_KEYS[self.category]
+        if unknown_keys:
+            raise ValueError("Metadado não permitido para esta categoria de evento.")
         if any(
             isinstance(value, list) and not all(isinstance(item, str) for item in value)
-            for value in metadata.values()
+            for value in self.metadata.values()
         ):
             raise ValueError("Listas de metadados aceitam somente strings.")
-        return metadata
+        return self
 
 
 class TicketEvent(TicketEventWrite):

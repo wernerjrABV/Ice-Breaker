@@ -1,14 +1,5 @@
 import type { TicketEvent } from '../../clients/client'
-
-function formatEventTime(createdAt: string): string {
-  const timestamp = new Date(createdAt)
-  if (Number.isNaN(timestamp.getTime())) return '—'
-  return new Intl.DateTimeFormat('pt-BR', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(timestamp)
-}
+import { eventStateLabels, formatEventTime } from './eventPresentation'
 
 export function DecisionTimeline({ events }: { events: TicketEvent[] }) {
   const chronologicalEvents = [...events].sort((left, right) => left.id - right.id)
@@ -16,7 +7,7 @@ export function DecisionTimeline({ events }: { events: TicketEvent[] }) {
   return (
     <section className="agent-panel agent-timeline-panel" aria-labelledby="decision-timeline-title">
       <div className="agent-panel-heading">
-        <p>Foco da decisão</p>
+        <p>Histórico completo</p>
         <h2 id="decision-timeline-title">Linha do tempo</h2>
       </div>
       <ol className="agent-timeline" aria-label="Linha do tempo do agente">
@@ -28,6 +19,9 @@ export function DecisionTimeline({ events }: { events: TicketEvent[] }) {
                 <strong>{item.title}</strong>
                 <time dateTime={item.created_at}>{formatEventTime(item.created_at)}</time>
               </div>
+              <span className={`agent-event-state agent-event-state-${item.state}`}>
+                {eventStateLabels[item.state]}
+              </span>
               <p>{item.description}</p>
             </div>
           </li>

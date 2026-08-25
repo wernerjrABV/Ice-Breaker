@@ -61,7 +61,12 @@ Inicie os serviços na ordem agente, back-end e front-end. A documentação inte
 
 ## Dashboard do agente
 
-Com um chamado aberto, o painel à direita acompanha `GET /tickets/{id}/events` a cada segundo. Atualizar a página reconstrói o histórico do chamado a partir desses eventos. O cartão de **R$ 200** representa economia potencial até a confirmação positiva do PDV; somente então passa a ser economia realizada.
+Com um chamado aberto, o painel à direita acompanha `GET /tickets/{id}/events` a cada segundo. O ID atual fica em `/home?ticketId=...`; atualizar ou compartilhar essa URL valida o chamado no back-end e reconstrói seu histórico. O cartão de **R$ 200** representa economia potencial até a confirmação positiva do PDV; somente então passa a ser economia realizada.
+
+Depois de executar o reset, abra diretamente os dois roteiros principais:
+
+- [DEMO-REMOTE — resolução remota](http://localhost:5173/home?ticketId=DEMO-REMOTE)
+- [DEMO-URGENT — encaminhamento urgente](http://localhost:5173/home?ticketId=DEMO-URGENT)
 
 ## Roteiro de demonstração repetível
 

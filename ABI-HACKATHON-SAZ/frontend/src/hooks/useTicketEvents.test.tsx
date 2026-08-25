@@ -73,6 +73,24 @@ test('drains a full page immediately and deduplicates ids', async () => {
   expect(result.current.events).toHaveLength(101)
 })
 
+test('drains one more page after a terminal page of exactly 100 events', async () => {
+  vi.useFakeTimers()
+  const fullTerminalPage = Array.from({ length: 100 }, (_, index) => event(index + 1))
+  mockedGetTicketEvents
+    .mockResolvedValueOnce({ items: fullTerminalPage, last_id: 100, terminal: true })
+    .mockResolvedValueOnce({ items: [event(101)], last_id: 101, terminal: true })
+
+  const { result } = renderHook(() => useTicketEvents('T-1'))
+  await act(async () => undefined)
+  await act(async () => { vi.advanceTimersByTime(0) })
+
+  expect(mockedGetTicketEvents).toHaveBeenNthCalledWith(2, 'T-1', 100, 100)
+  expect(result.current.events).toHaveLength(101)
+  expect(result.current.connection).toBe('complete')
+  await act(async () => { vi.advanceTimersByTime(5_000) })
+  expect(mockedGetTicketEvents).toHaveBeenCalledTimes(2)
+})
+
 test('keeps events and backs off at one, two, four, then five seconds', async () => {
   vi.useFakeTimers()
   mockedGetTicketEvents
@@ -115,4 +133,52 @@ test('never renders the previous ticket events while resetting for a new ticket'
       state: expect.objectContaining({ events: [], connection: 'loading', error: null }),
     }),
   ])
+})
+
+test('ignores a late response after switching to a new ticket', async () => {
+  let finishFirst: ((value: TicketEventsResponse) => void) | undefined
+  mockedGetTicketEvents
+    .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve }))
+    .mockResolvedValueOnce({ items: [event(2)], last_id: 2, terminal: true })
+
+  const { result, rerender } = renderHook(
+    ({ ticketId }) => useTicketEvents(ticketId),
+    { initialProps: { ticketId: 'T-1' } },
+  )
+  await act(async () => undefined)
+  rerender({ ticketId: 'T-2' })
+  await act(async () => undefined)
+  expect(result.current.events.map((item) => item.id)).toEqual([2])
+
+  await act(async () => {
+    finishFirst?.({ items: [event(1)], last_id: 1, terminal: true })
+  })
+
+  expect(result.current.events.map((item) => item.id)).toEqual([2])
+  expect(result.current.connection).toBe('complete')
+})
+
+test('ignores a late response after unmount', async () => {
+  let finishRequest: ((value: TicketEventsResponse) => void) | undefined
+  const observed: TicketEventsState[] = []
+  mockedGetTicketEvents.mockImplementationOnce(
+    () => new Promise((resolve) => { finishRequest = resolve }),
+  )
+
+  function Probe() {
+    const state = useTicketEvents('T-1')
+    useLayoutEffect(() => { observed.push(state) }, [state])
+    return null
+  }
+
+  const { unmount } = render(<Probe />)
+  await act(async () => undefined)
+  const observationsBeforeUnmount = observed.length
+  unmount()
+
+  await act(async () => {
+    finishRequest?.({ items: [event(1)], last_id: 1, terminal: true })
+  })
+
+  expect(observed).toHaveLength(observationsBeforeUnmount)
 })
