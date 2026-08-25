@@ -53,6 +53,35 @@ def test_demo_ticket_api_rejects_blank_subject(api):
     assert api.post("/demo/tickets", json={"assunto": "  "}).status_code == 422
 
 
+def test_demo_ticket_api_rejects_fields_beyond_subject(api):
+    response = api.post(
+        "/demo/tickets",
+        json={"assunto": "Cooler não gela", "nome_pdv": "Outro PDV"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_demo_ticket_api_strips_subject_before_creating_ticket(api):
+    response = api.post(
+        "/demo/tickets",
+        json={"assunto": "  Cooler não gela  "},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["assunto"] == "Cooler não gela"
+
+
+@pytest.mark.parametrize(
+    ("assunto", "expected_status"),
+    [("a" * 500, 201), ("a" * 501, 422)],
+)
+def test_demo_ticket_api_enforces_subject_length(api, assunto, expected_status):
+    response = api.post("/demo/tickets", json={"assunto": assunto})
+
+    assert response.status_code == expected_status
+
+
 @pytest.mark.parametrize(
     ("equipment_type", "assunto"),
     [

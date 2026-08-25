@@ -8,7 +8,7 @@ from typing import Any
 import requests
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src import client, db, demo_data, service
 from src.client import call_agent_kickoff
@@ -49,6 +49,8 @@ class CreateTicketRequest(BaseModel):
 
 
 class CreateDemoTicketRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     assunto: str = Field(min_length=1, max_length=500)
 
     @field_validator("assunto")
