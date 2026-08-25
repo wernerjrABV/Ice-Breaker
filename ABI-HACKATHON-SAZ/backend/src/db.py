@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import ConversationStage, EquipmentType, TicketStatus
+from .models import ConversationStage, EquipmentType, TicketEventWrite, TicketStatus
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "backend.db"
 
@@ -96,6 +96,25 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ticket_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                state TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (ticket_id) REFERENCES tickets(id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ticket_events_ticket_id_id "
+            "ON ticket_events(ticket_id, id)"
+        )
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -113,12 +132,91 @@ def _datetime_iso(value: datetime | None) -> str | None:
     return _as_utc(value).isoformat() if value is not None else None
 
 
+def _insert_ticket_events(
+    conn: sqlite3.Connection,
+    ticket_id: str,
+    events: Collection[TicketEventWrite],
+) -> list[dict[str, object]]:
+    inserted: list[dict[str, object]] = []
+    for event in events:
+        created_at = _now_iso()
+        cursor = conn.execute(
+            """
+            INSERT INTO ticket_events (
+                ticket_id, category, title, description, state, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ticket_id,
+                event.category.value,
+                event.title,
+                event.description,
+                event.state.value,
+                json.dumps(event.metadata, ensure_ascii=False, sort_keys=True),
+                created_at,
+            ),
+        )
+        inserted.append({
+            "id": int(cursor.lastrowid),
+            "ticket_id": ticket_id,
+            "category": event.category.value,
+            "title": event.title,
+            "description": event.description,
+            "state": event.state.value,
+            "metadata": event.metadata,
+            "created_at": created_at,
+        })
+    return inserted
+
+
+def record_ticket_events(
+    ticket_id: str,
+    events: Collection[TicketEventWrite],
+) -> list[dict[str, object]]:
+    with _connect() as conn:
+        return _insert_ticket_events(conn, ticket_id, events)
+
+
+def list_ticket_events(
+    ticket_id: str,
+    after: int = 0,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, ticket_id, category, title, description, state,
+                   metadata_json, created_at
+            FROM ticket_events
+            WHERE ticket_id = ? AND id > ?
+            ORDER BY id
+            LIMIT ?
+            """,
+            (ticket_id, after, limit),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "ticket_id": row["ticket_id"],
+            "category": row["category"],
+            "title": row["title"],
+            "description": row["description"],
+            "state": row["state"],
+            "metadata": json.loads(row["metadata_json"]),
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
 def create_ticket(
     ticket_id: str,
     nome_pdv: str,
     assunto: str,
     descricao_base: str,
     equipment_type: EquipmentType = EquipmentType.COOLER,
+    *,
+    events: Collection[TicketEventWrite] = (),
 ) -> None:
     now = _now_iso()
     with _connect() as conn:
@@ -144,6 +242,7 @@ def create_ticket(
                 now,
             ),
         )
+        _insert_ticket_events(conn, ticket_id, events)
 
 
 def append_message(ticket_id: str, role: str, content: str, kind: str = "text") -> None:
@@ -167,6 +266,8 @@ def set_equipment(
     numero_serie: str,
     confianca: float,
     image_name: str | None,
+    *,
+    events: Collection[TicketEventWrite] = (),
 ) -> None:
     with _connect() as conn:
         conn.execute(
@@ -185,9 +286,15 @@ def set_equipment(
             "UPDATE tickets SET updated_at = ? WHERE id = ?",
             (_now_iso(), ticket_id),
         )
+        _insert_ticket_events(conn, ticket_id, events)
 
 
-def record_checklist_actions(ticket_id: str, actions: Collection[str]) -> None:
+def record_checklist_actions(
+    ticket_id: str,
+    actions: Collection[str],
+    *,
+    events: Collection[TicketEventWrite] = (),
+) -> None:
     """Persist each backend-approved checklist action as structured evidence."""
     safe_actions = tuple(str(action).strip() for action in actions if str(action).strip())
     now = _now_iso()
@@ -207,6 +314,7 @@ def record_checklist_actions(ticket_id: str, actions: Collection[str]) -> None:
             "UPDATE tickets SET updated_at = ? WHERE id = ?",
             (now, ticket_id),
         )
+        _insert_ticket_events(conn, ticket_id, events)
 
 
 def set_ticket_state(
@@ -216,9 +324,11 @@ def set_ticket_state(
     deadline: datetime | None = None,
     priority: str = "normal",
     reason: str = "",
+    *,
+    events: Collection[TicketEventWrite] = (),
 ) -> None:
     with _connect() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE tickets
             SET status = ?, stage = ?, confirmation_deadline = ?, priority = ?,
@@ -235,6 +345,8 @@ def set_ticket_state(
                 ticket_id,
             ),
         )
+        if cursor.rowcount:
+            _insert_ticket_events(conn, ticket_id, events)
 
 
 def _ticket_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:

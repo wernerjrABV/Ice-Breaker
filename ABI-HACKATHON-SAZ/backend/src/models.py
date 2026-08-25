@@ -1,6 +1,7 @@
 from enum import Enum
+from typing import TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class TicketStatus(str, Enum):
@@ -136,3 +137,67 @@ class TriageDecision(BaseModel):
     priority: Priority = Priority.NORMAL
     checklist: list[str] = Field(default_factory=list)
     reason: str
+
+
+class TicketEventCategory(str, Enum):
+    TICKET_CREATED = "ticket_created"
+    SCOPE_VALIDATED = "scope_validated"
+    RISK_EVALUATED = "risk_evaluated"
+    STAGE_CHANGED = "stage_changed"
+    AGENT_REQUESTED = "agent_requested"
+    AGENT_INTERPRETED = "agent_interpreted"
+    OCR_COMPLETED = "ocr_completed"
+    EQUIPMENT_CONFIRMED = "equipment_confirmed"
+    TRIAGE_DECISION = "triage_decision"
+    CHECKLIST_SENT = "checklist_sent"
+    CONFIRMATION_WAITING = "confirmation_waiting"
+    TICKET_RESOLVED = "ticket_resolved"
+    SUPPLIER_ROUTED = "supplier_routed"
+    CONFIRMATION_EXPIRED = "confirmation_expired"
+
+
+class TicketEventState(str, Enum):
+    COMPLETED = "completed"
+    ACTIVE = "active"
+    WAITING = "waiting"
+    WARNING = "warning"
+    FAILED = "failed"
+
+
+TicketEventMetadataValue: TypeAlias = str | int | float | bool | None | list[str]
+
+
+class TicketEventWrite(BaseModel):
+    category: TicketEventCategory
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=500)
+    state: TicketEventState
+    metadata: dict[str, TicketEventMetadataValue] = Field(default_factory=dict)
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata(
+        cls,
+        metadata: dict[str, TicketEventMetadataValue],
+    ) -> dict[str, TicketEventMetadataValue]:
+        forbidden = {"prompt", "raw_response", "token", "api_key", "stack_trace", "message"}
+        if forbidden.intersection(key.casefold() for key in metadata):
+            raise ValueError("Metadado sensível não é permitido em eventos.")
+        if any(
+            isinstance(value, list) and not all(isinstance(item, str) for item in value)
+            for value in metadata.values()
+        ):
+            raise ValueError("Listas de metadados aceitam somente strings.")
+        return metadata
+
+
+class TicketEvent(TicketEventWrite):
+    id: int
+    ticket_id: str
+    created_at: str
+
+
+class TicketEventsResponse(BaseModel):
+    items: list[TicketEvent]
+    last_id: int
+    terminal: bool

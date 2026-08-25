@@ -4,7 +4,24 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src import db
-from src.models import ConversationStage, EquipmentType, TicketStatus
+from src.models import (
+    ConversationStage,
+    EquipmentType,
+    TicketEventCategory,
+    TicketEventState,
+    TicketEventWrite,
+    TicketStatus,
+)
+
+
+def event(category=TicketEventCategory.TICKET_CREATED, title="Chamado recebido"):
+    return TicketEventWrite(
+        category=category,
+        title=title,
+        description="Evento público e auditável.",
+        state=TicketEventState.COMPLETED,
+        metadata={"equipment_type": "cooler"},
+    )
 
 
 def test_ticket_round_trip(tmp_path, monkeypatch):
@@ -121,3 +138,49 @@ def test_bare_string_expiry_filter_is_one_exact_ticket_id(tmp_path, monkeypatch)
         item["id"]
         for item in db.list_expired_confirmations(ticket_ids="T-STRING")
     ] == ["T-STRING"]
+
+
+def test_ticket_events_are_ordered_and_filtered_incrementally(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "events.db")
+    db.init_db()
+    db.create_ticket("T-EVENT", "PDV", "Não gela", "", events=[event()])
+    first = db.list_ticket_events("T-EVENT")[0]
+    db.record_ticket_events(
+        "T-EVENT",
+        [event(TicketEventCategory.RISK_EVALUATED, "Risco verificado")],
+    )
+
+    remaining = db.list_ticket_events("T-EVENT", after=int(first["id"]), limit=100)
+
+    assert [item["category"] for item in remaining] == ["risk_evaluated"]
+    assert remaining[0]["metadata"] == {"equipment_type": "cooler"}
+    assert remaining[0]["created_at"].endswith("+00:00")
+
+
+def test_ticket_event_metadata_rejects_nested_or_sensitive_values():
+    with pytest.raises(ValueError):
+        TicketEventWrite(
+            category=TicketEventCategory.AGENT_INTERPRETED,
+            title="Agente interpretou",
+            description="Resposta validada.",
+            state=TicketEventState.COMPLETED,
+            metadata={"raw_response": {"secret": "not allowed"}},
+        )
+
+
+def test_state_and_event_roll_back_together(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "atomic.db")
+    db.init_db()
+    db.create_ticket("T-ATOMIC", "PDV", "Não gela", "")
+    invalid = event()
+    invalid.title = None  # type: ignore[assignment]
+
+    with pytest.raises(sqlite3.IntegrityError):
+        db.set_ticket_state(
+            "T-ATOMIC",
+            TicketStatus.WAITING_CONFIRMATION,
+            ConversationStage.CONFIRMATION,
+            events=[invalid],
+        )
+
+    assert db.get_ticket("T-ATOMIC")["stage"] == ConversationStage.PROXIMITY.value
