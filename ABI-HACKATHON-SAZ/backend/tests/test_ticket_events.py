@@ -15,6 +15,15 @@ def categories(ticket_id: str) -> list[str]:
     return [str(item["category"]) for item in db.list_ticket_events(ticket_id)]
 
 
+def test_initial_triage_events_expose_decision_without_subject_text():
+    ticket = service.create_demo_case("Cooler não gela")
+    history = db.list_ticket_events(str(ticket["id"]))
+
+    assert "initial_triage_started" in categories(str(ticket["id"]))
+    assert "pdv_conversation_started" in categories(str(ticket["id"]))
+    assert all(ticket["assunto"] not in str(item["metadata"]) for item in history)
+
+
 def test_remote_resolution_records_auditable_decisions(monkeypatch):
     monkeypatch.setattr(
         service.client,

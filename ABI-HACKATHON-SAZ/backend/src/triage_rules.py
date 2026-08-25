@@ -1,9 +1,26 @@
 import unicodedata
 
-from src.models import Outcome, Priority, RiskFlag, Symptom, TriageDecision
+from src.models import (
+    InitialTriageDecision,
+    Outcome,
+    Priority,
+    RiskFlag,
+    Symptom,
+    TriageDecision,
+)
 
 
 _CRITICAL_RISKS = frozenset(RiskFlag)
+_INITIAL_RISK_PHRASES = (
+    "cheiro de queimado",
+    "cheiro a queimado",
+    "cheiro queimado",
+    "faisca",
+    "vazamento",
+    "vazando",
+    "cabo danificado",
+)
+_INITIAL_SUPPLIER_PHRASES = ("fornecedor", "visita", "troca")
 
 _SYMPTOM_PHRASES: tuple[tuple[Symptom, tuple[str, ...]], ...] = (
     (
@@ -62,6 +79,37 @@ def normalize_symptom(text: str) -> Symptom:
         if any(phrase in normalized for phrase in phrases):
             return symptom
     return Symptom.UNKNOWN
+
+
+def decide_initial_triage(subject: str) -> InitialTriageDecision:
+    normalized = " ".join(_remove_accents(subject).split())
+    if any(phrase in normalized for phrase in _INITIAL_RISK_PHRASES):
+        return InitialTriageDecision(
+            requires_pdv_contact=False,
+            priority=Priority.URGENT,
+            reason="Risco crítico identificado.",
+        )
+    if any(phrase in normalized for phrase in _INITIAL_SUPPLIER_PHRASES):
+        return InitialTriageDecision(
+            requires_pdv_contact=False,
+            priority=Priority.NORMAL,
+            reason="Solicitação de fornecedor identificada.",
+        )
+    if normalize_symptom(subject) in {
+        Symptom.FREEZING_DRINKS,
+        Symptom.DOOR_NOT_CLOSING,
+        Symptom.NOT_COOLING,
+    }:
+        return InitialTriageDecision(
+            requires_pdv_contact=True,
+            priority=Priority.NORMAL,
+            reason="Sintoma pode seguir checklist remoto seguro.",
+        )
+    return InitialTriageDecision(
+        requires_pdv_contact=False,
+        priority=Priority.NORMAL,
+        reason="Sintoma sem roteiro remoto seguro.",
+    )
 
 
 def decide_triage(symptom: Symptom, risks: set[RiskFlag]) -> TriageDecision:

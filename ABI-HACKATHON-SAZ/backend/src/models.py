@@ -1,5 +1,6 @@
+from dataclasses import dataclass
 from enum import Enum
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -81,10 +82,23 @@ class SupplierSummary(BaseModel):
     motivo: str
 
 
+TicketMessageRole: TypeAlias = Literal["assistant", "user", "internal"]
+TicketMessageKind: TypeAlias = Literal[
+    "text",
+    "opening",
+    "routing",
+    "conversation",
+    "identification",
+    "resolution",
+    "checklist",
+    "internal_status",
+]
+
+
 class TicketMessage(BaseModel):
-    role: str
+    role: TicketMessageRole
     content: str
-    kind: str
+    kind: TicketMessageKind
     created_at: str
 
 
@@ -139,6 +153,13 @@ class TriageDecision(BaseModel):
     reason: str
 
 
+@dataclass(frozen=True)
+class InitialTriageDecision:
+    requires_pdv_contact: bool
+    priority: Priority
+    reason: str
+
+
 class TicketEventCategory(str, Enum):
     TICKET_CREATED = "ticket_created"
     SCOPE_VALIDATED = "scope_validated"
@@ -154,6 +175,10 @@ class TicketEventCategory(str, Enum):
     TICKET_RESOLVED = "ticket_resolved"
     SUPPLIER_ROUTED = "supplier_routed"
     CONFIRMATION_EXPIRED = "confirmation_expired"
+    INITIAL_TRIAGE_STARTED = "initial_triage_started"
+    INITIAL_TRIAGE_ROUTED_SUPPLIER = "initial_triage_routed_supplier"
+    PDV_CONVERSATION_STARTED = "pdv_conversation_started"
+    REMOTE_SOLUTION_FOUND = "remote_solution_found"
 
 
 class TicketEventState(str, Enum):
@@ -191,6 +216,16 @@ TICKET_EVENT_METADATA_KEYS: dict[TicketEventCategory, frozenset[str]] = {
         {"reason", "priority", "saving_brl"}
     ),
     TicketEventCategory.CONFIRMATION_EXPIRED: frozenset({"reason", "priority"}),
+    TicketEventCategory.INITIAL_TRIAGE_STARTED: frozenset(
+        {"reason", "priority", "requires_pdv_contact"}
+    ),
+    TicketEventCategory.INITIAL_TRIAGE_ROUTED_SUPPLIER: frozenset(
+        {"reason", "priority", "requires_pdv_contact"}
+    ),
+    TicketEventCategory.PDV_CONVERSATION_STARTED: frozenset(
+        {"reason", "priority", "requires_pdv_contact"}
+    ),
+    TicketEventCategory.REMOTE_SOLUTION_FOUND: frozenset({"reason"}),
 }
 
 
