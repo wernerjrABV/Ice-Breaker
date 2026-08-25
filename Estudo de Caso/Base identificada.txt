@@ -1,0 +1,14 @@
+Base identificada:
+
+14.324 tickets com potencial de resolução remota.
+Custo médio por manutenção: US$ 40.
+
+Cenário 60% de sucesso
+
+14.324 × 60% = 8.594 visitas evitadas
+8.594 × US$ 40 = US$ 343.760/quarter
+
+Cenário 75% de sucesso
+
+14.324 × 75% = 10.743 visitas evitadas
+10.743 × US$ 40 = US$ 429.720/quarter
