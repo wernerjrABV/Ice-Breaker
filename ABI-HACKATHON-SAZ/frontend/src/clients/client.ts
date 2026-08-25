@@ -86,6 +86,33 @@ export interface KickoffRequest {
   updated_at: string
 }
 
+export type TicketEventCategory =
+  | 'ticket_created' | 'scope_validated' | 'risk_evaluated' | 'stage_changed'
+  | 'agent_requested' | 'agent_interpreted' | 'ocr_completed'
+  | 'equipment_confirmed' | 'triage_decision' | 'checklist_sent'
+  | 'confirmation_waiting' | 'ticket_resolved' | 'supplier_routed'
+  | 'confirmation_expired'
+
+export type TicketEventState = 'completed' | 'active' | 'waiting' | 'warning' | 'failed'
+export type TicketEventMetadataValue = string | number | boolean | null | string[]
+
+export interface TicketEvent {
+  id: number
+  ticket_id: string
+  category: TicketEventCategory
+  title: string
+  description: string
+  state: TicketEventState
+  metadata: Record<string, TicketEventMetadataValue>
+  created_at: string
+}
+
+export interface TicketEventsResponse {
+  items: TicketEvent[]
+  last_id: number
+  terminal: boolean
+}
+
 async function readResponse<T>(response: Response, action: string): Promise<T> {
   if (!response.ok) {
     throw new Error(`${action}: ${response.status}`)
@@ -126,6 +153,20 @@ export async function getTicket(ticketId: string): Promise<Ticket> {
   const response = await request(`${API_BASE_URL}/tickets/${ticketId}`, undefined, 'Não foi possível obter o ticket')
 
   return readResponse(response, 'Não foi possível obter o ticket')
+}
+
+export async function getTicketEvents(
+  ticketId: string,
+  after = 0,
+  limit = 100,
+): Promise<TicketEventsResponse> {
+  const params = new URLSearchParams({ after: String(after), limit: String(limit) })
+  const response = await request(
+    `${API_BASE_URL}/tickets/${ticketId}/events?${params}`,
+    undefined,
+    'Não foi possível acompanhar o agente',
+  )
+  return readResponse(response, 'Não foi possível acompanhar o agente')
 }
 
 export async function sendMessage(ticketId: string, content: string): Promise<Ticket> {

@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest'
-import { createTicket, expireConfirmations, getTicket, sendMessage, sendPhoto, sendSerial } from './client'
+import { createTicket, expireConfirmations, getTicket, getTicketEvents, sendMessage, sendPhoto, sendSerial } from './client'
 import type { Message, Ticket } from './client'
 
 afterEach(() => vi.restoreAllMocks())
@@ -47,6 +47,31 @@ test('gets a ticket by id', async () => {
 
   await expect(getTicket('T-1')).resolves.toEqual(normalBackendTicket)
   expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/tickets/T-1'))
+})
+
+test('gets only ticket events after the supplied id', async () => {
+  const payload = {
+    items: [{
+      id: 8,
+      ticket_id: 'T-1',
+      category: 'risk_evaluated',
+      title: 'Risco verificado',
+      description: 'Nenhum risco crítico detectado.',
+      state: 'completed',
+      metadata: { detected: false, risk_flags: [] },
+      created_at: '2026-08-25T17:32:09Z',
+    }],
+    last_id: 8,
+    terminal: false,
+  }
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify(payload), { status: 200 }),
+  )
+
+  await expect(getTicketEvents('T-1', 7, 100)).resolves.toEqual(payload)
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringContaining('/tickets/T-1/events?after=7&limit=100'),
+  )
 })
 
 test('sends a message to a ticket', async () => {
